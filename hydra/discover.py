@@ -211,8 +211,10 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     # biggest data blob first — most likely the real listing/data endpoint
     candidates.sort(key=lambda c: c.size, reverse=True)
 
-    # SSR fallback: if no XHR API fired, the data may be inlined in the HTML.
-    embedded = extract_embedded(html) if (html and not candidates) else []
+    # Always check for SSR-inlined data too: some sites fire an API for *part* of
+    # the page (ads, suggestions) but server-render the main list into the HTML
+    # (Vinted, most Next.js apps). Surfacing both gives the full picture.
+    embedded = extract_embedded(html) if html else []
 
     # Decide blocked from the TERMINAL state, not a challenge that already cleared.
     # Real data captured → we're through, full stop. Otherwise a lingering challenge

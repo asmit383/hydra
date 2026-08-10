@@ -85,6 +85,16 @@ def _cmd_capture(args: argparse.Namespace) -> int:
                 print(f"    auth headers present: {auth}")
             print(f"    sample: {json.dumps(c.sample, default=str)[:160]}")
             print()
+        # some sites SSR the main list even while an API serves side content —
+        # surface a substantial inlined blob alongside the API candidates.
+        big = [b for b in r.embedded if b.records_count >= 5]
+        if big:
+            print("also inlined in the HTML (SSR — often the main list):\n")
+            for i, b in enumerate(big, 1):
+                print(f"[S{i}] {b.kind} · {b.size:,} bytes · "
+                      f"{b.records_count} records at {b.records_path}")
+                print(f"     sample: {json.dumps(b.sample, default=str)[:140]}")
+                print()
         return 0
 
     if r.embedded:
