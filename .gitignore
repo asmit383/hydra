@@ -7,3 +7,10 @@ __pycache__/
 leads*.csv
 proxies.txt
 proxies*.txt
+
+# saved auth sessions from `hydra login` — cookies + tokens, NEVER commit
+hydra_session.json
+runcrate.json
+*session*.json
+*.session.json
+*.state.json

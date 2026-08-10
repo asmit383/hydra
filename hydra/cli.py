@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from hydra.discover import capture
@@ -161,7 +162,12 @@ def _cmd_login(args: argparse.Namespace) -> int:
         page.goto(args.url)
         input("\nLog in in the browser window, then press Enter here to save the session… ")
         ctx.storage_state(path=args.state)
-    print(f"session saved → {args.state}\n"
+    try:
+        os.chmod(args.state, 0o600)   # it holds cookies + tokens — owner-only
+    except OSError:
+        pass
+    print(f"session saved → {args.state}  (chmod 600 — it's a credential; keep it secret,\n"
+          f"                    it's gitignored by default)\n"
           f"now:  hydra capture <url-behind-login> --state {args.state}")
     return 0
 
