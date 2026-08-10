@@ -152,8 +152,10 @@ def _cmd_login(args: argparse.Namespace) -> int:
     from hydra.session import _geoip_for, parse_proxy
 
     proxy = parse_proxy(args.proxy_str) if args.proxy_str else None
+    # force English UI for the manual login (geoip locale can serve a regional
+    # language); the saved cookies are locale-independent, so capture is unaffected.
     with Camoufox(headless=False, humanize=True, geoip=_geoip_for(proxy),
-                  proxy=proxy, os=["windows", "macos"]) as browser:
+                  proxy=proxy, os=["windows", "macos"], locale=args.lang) as browser:
         ctx = browser.new_context()
         page = ctx.new_page()
         page.goto(args.url)
@@ -200,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="where to save the session (default hydra_session.json)")
     login.add_argument("--proxy-str", metavar="ip:port:user:pass",
                        help="log in through this proxy (match the exit you'll capture from)")
+    login.add_argument("--lang", default="en-US", help="UI locale for the login window")
     login.set_defaults(func=_cmd_login)
 
     heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")
