@@ -28,21 +28,51 @@ def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
 
 
 def _cmd_capture(args: argparse.Namespace) -> int:
-    proxy = pick_proxy(args.proxy, proxies_file=args.proxies_file, explicit=args.proxy_str)
-    via = "native ISP IP" if proxy is None else proxy["server"]
+    # map the proxy mode to a start exit + escalation pool for the self-healing loop:
+    #   auto     → start native, escalate to proxies.txt if a wall is hit (default)
+    #   native   → native only, no proxy escalation
+    #   file     → start on a proxies.txt exit
+    #   explicit → use --proxy-str
+    mode = args.proxy
+    if mode == "explicit":
+        heal_kw = dict(start="proxy", explicit=args.proxy_str)
+    elif mode == "file":
+        heal_kw = dict(start="proxy", proxies_file=args.proxies_file)
+    elif mode == "native":
+        heal_kw = dict(start="native", proxies_file=None)
+    else:  # auto
+        heal_kw = dict(start="native", proxies_file=args.proxies_file)
 
-    cap_kw = dict(proxy=proxy, headless=not args.headful,
-                  interact=not args.no_interact, scroll_steps=args.scrolls)
+    attempts = 1 if args.no_heal else args.attempts
+    if not args.json:
+        heal = "no-heal" if args.no_heal else f"self-healing, up to {attempts} attempts"
+        print(f"→ capturing {args.url}  ({heal}) ...\n")
+
+    def on_attempt(att):
+        # stay quiet on a clean first hit; narrate only when actually healing
+        if att.verdict.blocked:
+            print(f"  ✗ attempt {att.n} via {att.via}: {att.verdict.kind} "
+                  f"(layer: {att.verdict.layer}) → {att.move}")
+        elif att.n > 1:
+            print(f"  ✓ attempt {att.n} via {att.via}: through")
+
+    r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
+                          interact=not args.no_interact, scroll_steps=args.scrolls,
+                          on_attempt=on_attempt, **heal_kw)
 
     if args.json:
-        r = capture(args.url, **cap_kw)
         out = {"candidates": [c.__dict__ for c in r.candidates],
                "embedded": [b.__dict__ for b in r.embedded]}
         print(json.dumps(out, default=str, indent=2))
         return 0 if (r.candidates or r.embedded) else 1
 
-    print(f"→ discovering internal APIs on {args.url}  (via {via}) ...\n")
-    r = capture(args.url, **cap_kw)
+    if not r.recovered:
+        print(f"\nblocked after {r.tries} attempt(s) — last: "
+              f"{r.attempts[-1].verdict.kind}. Try --proxy file, or raise --attempts.")
+        return 1
+
+    if r.tries > 1:
+        print(f"  recovered in {r.tries} attempts.\n")
 
     if r.candidates:
         print(f"found {len(r.candidates)} candidate endpoint(s), biggest first:\n")
@@ -111,15 +141,25 @@ def build_parser() -> argparse.ArgumentParser:
         description="Stealth-automation primitive on Camoufox — find a site's internal API.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    cap = sub.add_parser("capture", help="discover the internal JSON API on a URL")
+    cap = sub.add_parser("capture", help="discover the internal JSON API on a URL "
+                                         "(self-heals through blocks by default)")
     cap.add_argument("url")
+    cap.add_argument("--proxy", choices=("auto", "native", "file", "explicit"), default="auto",
+                     help="auto = native, escalate to proxies.txt if blocked (default); "
+                          "native = native only; file = start on a proxies.txt exit; "
+                          "explicit = --proxy-str")
+    cap.add_argument("--proxy-str", metavar="ip:port:user:pass", help="proxy for --proxy explicit")
+    cap.add_argument("--proxies-file", metavar="PATH",
+                     help="proxies.txt for escalation (or set PROXIES_FILE)")
+    cap.add_argument("--attempts", type=int, default=3, help="max self-heal attempts")
+    cap.add_argument("--no-heal", action="store_true",
+                     help="single shot — don't heal through a block")
     cap.add_argument("--json", action="store_true", help="emit candidates as JSON")
     cap.add_argument("--headful", action="store_true", help="show the browser window")
     cap.add_argument("--no-interact", action="store_true",
                      help="skip the scroll pass (only catch APIs that fire on load)")
     cap.add_argument("--scrolls", type=int, default=6,
                      help="how many scroll steps to trigger lazy/infinite-scroll APIs")
-    _add_proxy_flags(cap)
     cap.set_defaults(func=_cmd_capture)
 
     heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")

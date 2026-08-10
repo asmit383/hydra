@@ -61,10 +61,15 @@ class HealResult:
     recovered: bool
     candidates: list[ApiCandidate]
     attempts: list[Attempt] = field(default_factory=list)
+    result: object = None          # the winning CaptureResult (candidates + embedded)
 
     @property
     def tries(self) -> int:
         return len(self.attempts)
+
+    @property
+    def embedded(self):
+        return self.result.embedded if self.result else []
 
 
 def resilient_capture(url: str, *, proxies_file: str | None = None,
@@ -72,6 +77,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                       strategy: str = "adaptive", max_attempts: int = 4,
                       base_backoff: float = 2.0, fp_retries_before_rotate: int = 1,
                       challenge_wait_ms: int = 6000, headless: bool = True,
+                      interact: bool = True, scroll_steps: int = 6,
                       on_attempt=None) -> HealResult:
     """Capture `url`, self-healing through blocks.
 
@@ -94,7 +100,8 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
 
     for n in range(1, max_attempts + 1):
         result = capture(url, proxy=exit_, headless=headless,
-                         challenge_wait_ms=challenge_wait_ms)
+                         challenge_wait_ms=challenge_wait_ms,
+                         interact=interact, scroll_steps=scroll_steps)
         v = diagnose(result)
         att = Attempt(n, _label(exit_), v, len(result.candidates))
         attempts.append(att)
@@ -103,7 +110,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
             att.move = "done"
             if on_attempt:
                 on_attempt(att)
-            return HealResult(True, result.candidates, attempts)
+            return HealResult(True, result.candidates, attempts, result=result)
 
         # ---- escalate for the next attempt ----------------------------------
         if n >= max_attempts:
