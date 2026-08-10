@@ -14,6 +14,7 @@ import sys
 
 from hydra.discover import discover
 from hydra.session import pick_proxy
+from hydra.stealth import resilient_capture
 
 
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
@@ -56,6 +57,38 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_heal(args: argparse.Namespace) -> int:
+    print(f"→ self-healing capture of {args.url}  "
+          f"({'static (no rotation)' if args.static else 'adaptive'}, "
+          f"up to {args.max_attempts} attempts)\n")
+
+    def on_attempt(att):
+        v = att.verdict
+        if v.blocked:
+            print(f"  attempt {att.n} via {att.via}")
+            print(f"    ✗ BLOCKED · {v.kind} · leaked layer: {v.layer}")
+            print(f"      {v.signal}  →  {v.action}")
+        else:
+            print(f"  attempt {att.n} via {att.via}")
+            print(f"    ✓ through · {att.n_candidates} candidate endpoint(s)")
+
+    result = resilient_capture(
+        args.url, proxy_mode=args.proxy, proxies_file=args.proxies_file,
+        explicit=args.proxy_str, max_attempts=args.max_attempts,
+        rotate=not args.static, headless=not args.headful, on_attempt=on_attempt)
+
+    print()
+    if result.recovered:
+        print(f"RECOVERED in {result.tries} attempt(s) — "
+              f"{len(result.candidates)} endpoint(s) found.")
+        for i, c in enumerate(result.candidates[:5], 1):
+            print(f"  [{i}] {c.method} {c.url}  ({c.size:,} B · {c.shape})")
+        return 0
+    print(f"NOT RECOVERED after {result.tries} attempt(s). "
+          f"Last block: {result.attempts[-1].verdict.kind}.")
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hydra",
@@ -68,6 +101,15 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--headful", action="store_true", help="show the browser window")
     _add_proxy_flags(cap)
     cap.set_defaults(func=_cmd_capture)
+
+    heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")
+    heal.add_argument("url")
+    heal.add_argument("--max-attempts", type=int, default=4)
+    heal.add_argument("--static", action="store_true",
+                      help="reuse one exit for every attempt (the baseline to beat)")
+    heal.add_argument("--headful", action="store_true", help="show the browser window")
+    _add_proxy_flags(heal)
+    heal.set_defaults(func=_cmd_heal)
 
     return parser
 
