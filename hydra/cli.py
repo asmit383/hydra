@@ -54,15 +54,15 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         if att.verdict.blocked:
             print(f"  ✗ attempt {att.n} via {att.via}: {att.verdict.kind} "
                   f"(layer: {att.verdict.layer}) → {att.move}")
-        elif att.move.startswith("expected"):
-            print(f"  ~ attempt {att.n} via {att.via}: {att.n_candidates} endpoints, {att.move}")
+        elif not att.verdict.blocked and "rotate exit" in att.move:
+            print(f"  ~ attempt {att.n} via {att.via}: {att.move}")
         elif att.n > 1:
             print(f"  ✓ attempt {att.n} via {att.via}: through")
 
     r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
                           interact=not args.no_interact, scroll_steps=args.scrolls,
                           storage_state=args.state, expect=args.expect,
-                          on_attempt=on_attempt, **heal_kw)
+                          min_candidates=args.min_endpoints, on_attempt=on_attempt, **heal_kw)
 
     if args.json:
         out = {"candidates": [c.__dict__ for c in r.candidates],
@@ -71,9 +71,10 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         return 0 if (r.candidates or r.embedded) else 1
 
     if not r.recovered:
-        if args.expect and (r.candidates or r.embedded):
-            print(f"\n⚠ expected '{args.expect}' not found after {r.tries} exit(s) — showing what "
-                  f"did fire (raise --attempts, or pin an in-country --proxy explicit):\n")
+        want = f"'{args.expect}'" if args.expect else f"{args.min_endpoints}+ endpoints"
+        if (args.expect or args.min_endpoints > 1) and (r.candidates or r.embedded):
+            print(f"\n⚠ never reached {want} after {r.tries} exit(s) — showing what did fire "
+                  f"(raise --attempts, or pin an in-country --proxy explicit):\n")
         else:
             print(f"\nblocked after {r.tries} attempt(s) — last: "
                   f"{r.attempts[-1].verdict.kind}. Try --proxy file, or raise --attempts.")
@@ -206,9 +207,12 @@ def build_parser() -> argparse.ArgumentParser:
                      help="how many scroll steps to trigger lazy/infinite-scroll APIs")
     cap.add_argument("--state", metavar="PATH",
                      help="saved session from `hydra login` — capture behind a login")
+    cap.add_argument("--min-endpoints", type=int, default=1, metavar="N",
+                     help="keep rotating exits until at least N endpoints are found "
+                          "(defeats geo-degraded 200s — no endpoint name needed)")
     cap.add_argument("--expect", metavar="SUBSTR",
-                     help="keep rotating exits until an endpoint URL contains this "
-                          "(defeats geo-degraded 200s that withhold the real data)")
+                     help="like --min-endpoints, but wait for an endpoint URL to "
+                          "contain this substring (when you know the endpoint name)")
     cap.set_defaults(func=_cmd_capture)
 
     login = sub.add_parser("login", help="log in by hand once and save the session "

@@ -79,21 +79,25 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                       challenge_wait_ms: int = 6000, headless: bool = True,
                       interact: bool = True, scroll_steps: int = 6,
                       storage_state: str | None = None, expect: str | None = None,
-                      on_attempt=None) -> HealResult:
+                      min_candidates: int = 1, on_attempt=None) -> HealResult:
     """Capture `url`, self-healing through blocks.
 
     strategy: 'adaptive' (layer-driven ladder, default) · 'static' (one exit, the
     baseline) · 'rotate' (fresh exit every attempt, the naive version).
     start: 'native' (no proxy first — usually the cleanest) or 'proxy'.
-    expect: a substring that must appear in a discovered endpoint URL for the
-    capture to count as done. Catches *geo-degraded* 200s — a site that returns a
-    thin page (not a block) from the wrong-country exit — and keeps rotating exits
-    until the endpoint you actually want fires.
+    Two ways to catch a *geo-degraded* 200 (a thin page, not a block, from a
+    wrong-country exit) and keep rotating exits until the real data arrives:
+      - min_candidates: require at least N discovered endpoints (no endpoint name
+        needed — the practical default for discovery).
+      - expect: require a discovered endpoint URL to contain this substring (when
+        you already know the endpoint you're after).
     """
     def _met(result) -> bool:
-        if not expect:
-            return True
-        return any(expect.lower() in c.url.lower() for c in result.candidates)
+        if len(result.candidates) < min_candidates:
+            return False
+        if expect and not any(expect.lower() in c.url.lower() for c in result.candidates):
+            return False
+        return True
 
     pool = [parse_proxy(explicit)] if explicit else load_proxies(proxies_file)
     tried: set[str] = set()
@@ -129,9 +133,11 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         # ---- escalate for the next attempt ----------------------------------
         if n >= max_attempts:
             att.move = "give up (out of attempts)"
-        elif not v.blocked:  # not blocked, but the expected endpoint didn't fire →
-            new = _fresh_exit(pool, tried)   # geo-degraded / thin: try another exit
-            exit_, att.move = new, f"expected '{expect}' missing → rotate exit → {_label(new)}"
+        elif not v.blocked:  # not blocked, but the result is thin / expected data
+            new = _fresh_exit(pool, tried)   # didn't fire → geo-degraded: try another exit
+            why = f"expected '{expect}' missing" if expect else \
+                  f"only {len(result.candidates)} endpoint(s)"
+            exit_, att.move = new, f"{why} → rotate exit → {_label(new)}"
             fp_tries = 0
         elif strategy == "static":
             att.move = "retry same exit (patience only)"
