@@ -14,7 +14,7 @@ from hydra.session import launch
 
 _NOISE = (
     "google-analytics", "googletagmanager", "doubleclick", "facebook.com",
-    "segment.io", "segment.com", "sentry.io", "datadoghq", "hotjar",
+    "segment.io", "segment.com", "rudderstack", "sentry.io", "datadoghq", "hotjar",
     "mixpanel", "cloudflareinsights", "intercom", "amplitude", "fullstory",
     "clarity.ms", "gstatic.com", "googleapis.com", "recaptcha", "/fonts",
     "fonts.", "cdn.jsdelivr", "unpkg.com", "bat.bing",
