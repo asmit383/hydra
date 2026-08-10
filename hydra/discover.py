@@ -26,6 +26,7 @@ _NOISE = (
     "cookielaw.org", "onetrust", "cookiebot", "usercentrics",  # consent/CMP config
     "adobedc.net", "demdex.net", "omtrdc.net",  # Adobe Experience Cloud tracking
     "stripe.com", "paypal.com", "braintreegateway",  # payment SDKs/infra
+    "zendesk.com", "zdassets.com", "zopim.com", "livechat", "tawk.to",  # support chat widgets
 )
 
 # Hosts/paths that mean "you got challenged", not "here's your data". Kept separate
