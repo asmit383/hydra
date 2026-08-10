@@ -54,12 +54,15 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         if att.verdict.blocked:
             print(f"  ✗ attempt {att.n} via {att.via}: {att.verdict.kind} "
                   f"(layer: {att.verdict.layer}) → {att.move}")
+        elif att.move.startswith("expected"):
+            print(f"  ~ attempt {att.n} via {att.via}: {att.n_candidates} endpoints, {att.move}")
         elif att.n > 1:
             print(f"  ✓ attempt {att.n} via {att.via}: through")
 
     r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
                           interact=not args.no_interact, scroll_steps=args.scrolls,
-                          storage_state=args.state, on_attempt=on_attempt, **heal_kw)
+                          storage_state=args.state, expect=args.expect,
+                          on_attempt=on_attempt, **heal_kw)
 
     if args.json:
         out = {"candidates": [c.__dict__ for c in r.candidates],
@@ -68,11 +71,15 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         return 0 if (r.candidates or r.embedded) else 1
 
     if not r.recovered:
-        print(f"\nblocked after {r.tries} attempt(s) — last: "
-              f"{r.attempts[-1].verdict.kind}. Try --proxy file, or raise --attempts.")
-        return 1
+        if args.expect and (r.candidates or r.embedded):
+            print(f"\n⚠ expected '{args.expect}' not found after {r.tries} exit(s) — showing what "
+                  f"did fire (raise --attempts, or pin an in-country --proxy explicit):\n")
+        else:
+            print(f"\nblocked after {r.tries} attempt(s) — last: "
+                  f"{r.attempts[-1].verdict.kind}. Try --proxy file, or raise --attempts.")
+            return 1
 
-    if r.tries > 1:
+    if r.recovered and r.tries > 1:
         print(f"  recovered in {r.tries} attempts.\n")
 
     if r.candidates:
@@ -199,6 +206,9 @@ def build_parser() -> argparse.ArgumentParser:
                      help="how many scroll steps to trigger lazy/infinite-scroll APIs")
     cap.add_argument("--state", metavar="PATH",
                      help="saved session from `hydra login` — capture behind a login")
+    cap.add_argument("--expect", metavar="SUBSTR",
+                     help="keep rotating exits until an endpoint URL contains this "
+                          "(defeats geo-degraded 200s that withhold the real data)")
     cap.set_defaults(func=_cmd_capture)
 
     login = sub.add_parser("login", help="log in by hand once and save the session "

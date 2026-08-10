@@ -78,13 +78,23 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                       base_backoff: float = 2.0, fp_retries_before_rotate: int = 1,
                       challenge_wait_ms: int = 6000, headless: bool = True,
                       interact: bool = True, scroll_steps: int = 6,
-                      storage_state: str | None = None, on_attempt=None) -> HealResult:
+                      storage_state: str | None = None, expect: str | None = None,
+                      on_attempt=None) -> HealResult:
     """Capture `url`, self-healing through blocks.
 
     strategy: 'adaptive' (layer-driven ladder, default) · 'static' (one exit, the
     baseline) · 'rotate' (fresh exit every attempt, the naive version).
     start: 'native' (no proxy first — usually the cleanest) or 'proxy'.
+    expect: a substring that must appear in a discovered endpoint URL for the
+    capture to count as done. Catches *geo-degraded* 200s — a site that returns a
+    thin page (not a block) from the wrong-country exit — and keeps rotating exits
+    until the endpoint you actually want fires.
     """
+    def _met(result) -> bool:
+        if not expect:
+            return True
+        return any(expect.lower() in c.url.lower() for c in result.candidates)
+
     pool = [parse_proxy(explicit)] if explicit else load_proxies(proxies_file)
     tried: set[str] = set()
 
@@ -97,6 +107,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
 
     attempts: list[Attempt] = []
     fp_tries = 0
+    last = None                            # best result seen, for the final report
 
     for n in range(1, max_attempts + 1):
         result = capture(url, proxy=exit_, headless=headless,
@@ -104,10 +115,12 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                          interact=interact, scroll_steps=scroll_steps,
                          storage_state=storage_state)
         v = diagnose(result)
+        if not v.blocked:
+            last = result
         att = Attempt(n, _label(exit_), v, len(result.candidates))
         attempts.append(att)
 
-        if not v.blocked:
+        if not v.blocked and _met(result):
             att.move = "done"
             if on_attempt:
                 on_attempt(att)
@@ -116,6 +129,10 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         # ---- escalate for the next attempt ----------------------------------
         if n >= max_attempts:
             att.move = "give up (out of attempts)"
+        elif not v.blocked:  # not blocked, but the expected endpoint didn't fire →
+            new = _fresh_exit(pool, tried)   # geo-degraded / thin: try another exit
+            exit_, att.move = new, f"expected '{expect}' missing → rotate exit → {_label(new)}"
+            fp_tries = 0
         elif strategy == "static":
             att.move = "retry same exit (patience only)"
         elif strategy == "rotate":
@@ -140,4 +157,5 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         if n < max_attempts:
             time.sleep(base_backoff * (2 ** (n - 1)))   # 2s, 4s, 8s...
 
-    return HealResult(False, [], attempts)
+    # never met the expectation — hand back the best (unblocked) result we did get
+    return HealResult(False, last.candidates if last else [], attempts, result=last)
