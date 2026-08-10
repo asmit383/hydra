@@ -1,0 +1,9 @@
+.env
+*.csv
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+leads*.csv
+proxies.txt
+proxies*.txt
