@@ -58,7 +58,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
 
     r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
                           interact=not args.no_interact, scroll_steps=args.scrolls,
-                          on_attempt=on_attempt, **heal_kw)
+                          storage_state=args.state, on_attempt=on_attempt, **heal_kw)
 
     if args.json:
         out = {"candidates": [c.__dict__ for c in r.candidates],
@@ -145,6 +145,25 @@ def _cmd_heal(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_login(args: argparse.Namespace) -> int:
+    """Open a real browser, let the user log in by hand, and save the session
+    (cookies + localStorage) so `capture --state` can reach data behind the login."""
+    from camoufox.sync_api import Camoufox
+    from hydra.session import _geoip_for, parse_proxy
+
+    proxy = parse_proxy(args.proxy_str) if args.proxy_str else None
+    with Camoufox(headless=False, humanize=True, geoip=_geoip_for(proxy),
+                  proxy=proxy, os=["windows", "macos"]) as browser:
+        ctx = browser.new_context()
+        page = ctx.new_page()
+        page.goto(args.url)
+        input("\nLog in in the browser window, then press Enter here to save the session… ")
+        ctx.storage_state(path=args.state)
+    print(f"session saved → {args.state}\n"
+          f"now:  hydra capture <url-behind-login> --state {args.state}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hydra",
@@ -170,7 +189,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="skip the scroll pass (only catch APIs that fire on load)")
     cap.add_argument("--scrolls", type=int, default=6,
                      help="how many scroll steps to trigger lazy/infinite-scroll APIs")
+    cap.add_argument("--state", metavar="PATH",
+                     help="saved session from `hydra login` — capture behind a login")
     cap.set_defaults(func=_cmd_capture)
+
+    login = sub.add_parser("login", help="log in by hand once and save the session "
+                                         "for `capture --state`")
+    login.add_argument("url", help="the site's login page")
+    login.add_argument("--state", metavar="PATH", default="hydra_session.json",
+                       help="where to save the session (default hydra_session.json)")
+    login.add_argument("--proxy-str", metavar="ip:port:user:pass",
+                       help="log in through this proxy (match the exit you'll capture from)")
+    login.set_defaults(func=_cmd_login)
 
     heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")
     heal.add_argument("url")

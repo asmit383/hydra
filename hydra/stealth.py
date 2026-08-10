@@ -78,7 +78,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                       base_backoff: float = 2.0, fp_retries_before_rotate: int = 1,
                       challenge_wait_ms: int = 6000, headless: bool = True,
                       interact: bool = True, scroll_steps: int = 6,
-                      on_attempt=None) -> HealResult:
+                      storage_state: str | None = None, on_attempt=None) -> HealResult:
     """Capture `url`, self-healing through blocks.
 
     strategy: 'adaptive' (layer-driven ladder, default) · 'static' (one exit, the
@@ -101,7 +101,8 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
     for n in range(1, max_attempts + 1):
         result = capture(url, proxy=exit_, headless=headless,
                          challenge_wait_ms=challenge_wait_ms,
-                         interact=interact, scroll_steps=scroll_steps)
+                         interact=interact, scroll_steps=scroll_steps,
+                         storage_state=storage_state)
         v = diagnose(result)
         att = Attempt(n, _label(exit_), v, len(result.candidates))
         attempts.append(att)

@@ -86,11 +86,18 @@ def _geoip_for(proxy: dict | None):
 
 
 @contextmanager
-def launch(proxy: dict | None = None, headless: bool = True):
+def launch(proxy: dict | None = None, headless: bool = True,
+          storage_state: str | None = None):
     """Yield a fresh Camoufox page. `proxy` is a dict (from pick_proxy / parse_proxy)
-    or None for the native ISP IP. Fresh browser per call keeps sessions clean."""
+    or None for the native ISP IP. `storage_state` is a path to a saved session
+    (cookies + localStorage from `hydra login`) — pass it to capture data behind a
+    login. Fresh browser per call keeps sessions clean."""
     with Camoufox(headless=headless, humanize=True,
                   geoip=_geoip_for(proxy), proxy=proxy,
                   os=["windows", "macos"]) as browser:
-        page = browser.new_page()
+        if storage_state:
+            ctx = browser.new_context(storage_state=storage_state)
+            page = ctx.new_page()
+        else:
+            page = browser.new_page()
         yield page

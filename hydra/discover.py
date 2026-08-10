@@ -25,6 +25,7 @@ _NOISE = (
     "fonts.", "cdn.jsdelivr", "unpkg.com", "bat.bing",
     "cookielaw.org", "onetrust", "cookiebot", "usercentrics",  # consent/CMP config
     "adobedc.net", "demdex.net", "omtrdc.net",  # Adobe Experience Cloud tracking
+    "stripe.com", "paypal.com", "braintreegateway",  # payment SDKs/infra
 )
 
 # Hosts/paths that mean "you got challenged", not "here's your data". Kept separate
@@ -118,7 +119,7 @@ def _autoscroll(page, steps: int, pause: int) -> None:
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             headless: bool = True, challenge_wait_ms: int = 6000,
             interact: bool = True, scroll_steps: int = 6,
-            scroll_pause: int = 1200) -> CaptureResult:
+            scroll_pause: int = 1200, storage_state: str | None = None) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
@@ -174,7 +175,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     final_url = url
     title = ""
     html = ""
-    with launch(proxy=proxy, headless=headless) as page:
+    with launch(proxy=proxy, headless=headless, storage_state=storage_state) as page:
         page.on("response", on_response)          # register BEFORE navigating!
         try:
             resp = page.goto(url, wait_until="networkidle", timeout=45000)
