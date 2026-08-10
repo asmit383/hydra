@@ -31,15 +31,18 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     proxy = pick_proxy(args.proxy, proxies_file=args.proxies_file, explicit=args.proxy_str)
     via = "native ISP IP" if proxy is None else proxy["server"]
 
+    cap_kw = dict(proxy=proxy, headless=not args.headful,
+                  interact=not args.no_interact, scroll_steps=args.scrolls)
+
     if args.json:
-        r = capture(args.url, proxy=proxy, headless=not args.headful)
+        r = capture(args.url, **cap_kw)
         out = {"candidates": [c.__dict__ for c in r.candidates],
                "embedded": [b.__dict__ for b in r.embedded]}
         print(json.dumps(out, default=str, indent=2))
         return 0 if (r.candidates or r.embedded) else 1
 
     print(f"→ discovering internal APIs on {args.url}  (via {via}) ...\n")
-    r = capture(args.url, proxy=proxy, headless=not args.headful)
+    r = capture(args.url, **cap_kw)
 
     if r.candidates:
         print(f"found {len(r.candidates)} candidate endpoint(s), biggest first:\n")
@@ -112,6 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("url")
     cap.add_argument("--json", action="store_true", help="emit candidates as JSON")
     cap.add_argument("--headful", action="store_true", help="show the browser window")
+    cap.add_argument("--no-interact", action="store_true",
+                     help="skip the scroll pass (only catch APIs that fire on load)")
+    cap.add_argument("--scrolls", type=int, default=6,
+                     help="how many scroll steps to trigger lazy/infinite-scroll APIs")
     _add_proxy_flags(cap)
     cap.set_defaults(func=_cmd_capture)
 

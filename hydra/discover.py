@@ -97,8 +97,28 @@ def _challenge_title(title: str) -> str | None:
     return next((t for t in _BLOCK_TITLES if t in low), None)
 
 
+def _autoscroll(page, steps: int, pause: int) -> None:
+    """Scroll the page in steps to fire infinite-scroll / lazy-loaded XHR. Safe:
+    scrolling never navigates away or submits anything — it just makes the page
+    ask for more data, which the response handler then catches. The single most
+    universal trigger; a lot of the web only fetches its data on scroll.
+
+    Uses a programmatic scrollTo(bottom) — that reliably fires the `scroll` events
+    infinite-scroll libraries listen on (a raw mouse wheel often doesn't), and each
+    step reaches the newly grown bottom to pull the next page."""
+    for _ in range(max(0, steps)):
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.mouse.wheel(0, 1200)   # nudge — some libs also watch wheel events
+        except Exception:
+            break
+        page.wait_for_timeout(pause)
+
+
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
-            headless: bool = True, challenge_wait_ms: int = 6000) -> CaptureResult:
+            headless: bool = True, challenge_wait_ms: int = 6000,
+            interact: bool = True, scroll_steps: int = 6,
+            scroll_pause: int = 1200) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
@@ -179,6 +199,9 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                     pass
                 if not _challenge_title(title):
                     break                          # challenge cleared → through
+        # interaction pass: scroll to fire lazy / infinite-scroll / paginated XHR
+        if interact and not _challenge_title(title):
+            _autoscroll(page, scroll_steps, scroll_pause)
         try:
             final_url = page.url
             html = page.content()
