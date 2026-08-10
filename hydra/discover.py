@@ -147,9 +147,11 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                 is_block = True
         if is_block or u in seen or _is_noise(u):
             return
-        # cheap filter first: content-type must smell like JSON
+        # DON'T gate on content-type — legacy backends serve JSON as text/plain or
+        # even text/html (e.g. Java/PHP betting & enterprise platforms). Skip only
+        # clearly-binary asset types, then let json.loads be the real filter.
         ctype = (response.headers or {}).get("content-type", "").lower()
-        if "json" not in ctype:
+        if any(b in ctype for b in ("image/", "font/", "video/", "audio/", "text/css", "javascript")):
             return
         # read the body — can fail (redirects, empty, already-consumed) → skip those
         try:
