@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hydra-automation"
+version = "0.1.0"
+description = "A stealth-automation primitive on Camoufox — auto-discovers a site's internal API and self-heals when detection breaks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Asmit Roy" }]
+keywords = ["automation", "camoufox", "stealth", "scraping", "playwright", "api-discovery"]
+dependencies = [
+    "camoufox[geoip]",
+    "httpx",
+]
+
+[project.urls]
+Homepage = "https://github.com/asmit383/hydra"
+Repository = "https://github.com/asmit383/hydra"
+
+[project.scripts]
+hydra = "hydra.cli:main"
+
+[tool.setuptools]
+packages = ["hydra"]

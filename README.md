@@ -39,11 +39,11 @@ captured for replay. Remaining v0.1 piece: `client.py` (browser-free replay).
 ## Quick start
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .          # installs the `hydra` command
 python -m camoufox fetch
 
 # discover the internal API on your own ISP IP
-python examples/find_api.py https://example.com
+hydra capture https://example.com
 ```
 
 ### It finds the endpoint the page hides
@@ -67,14 +67,16 @@ proxy's exit IP so timezone/locale match):
 
 ```bash
 # native — your ISP IP (default)
-python examples/find_api.py <url>
+hydra capture <url>
 
 # explicit — one proxy
-python examples/find_api.py <url> --proxy explicit --proxy-str ip:port:user:pass
+hydra capture <url> --proxy explicit --proxy-str ip:port:user:pass
 
 # file — random line from a proxies.txt (ip:port:user:pass per line)
-PROXIES_FILE=./proxies.txt python examples/find_api.py <url> --proxy file
+PROXIES_FILE=./proxies.txt hydra capture <url> --proxy file
 ```
+
+`--json` emits the candidates as JSON (for piping); `--headful` shows the browser.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
 spoofing. Hydra is the *adaptive* layer above it.
