@@ -58,24 +58,25 @@ def _cmd_capture(args: argparse.Namespace) -> int:
 
 
 def _cmd_heal(args: argparse.Namespace) -> int:
+    strategy = "static" if args.static else args.strategy
     print(f"→ self-healing capture of {args.url}  "
-          f"({'static (no rotation)' if args.static else 'adaptive'}, "
-          f"up to {args.max_attempts} attempts)\n")
+          f"(strategy={strategy}, start={args.start}, up to {args.max_attempts} attempts)\n")
 
     def on_attempt(att):
         v = att.verdict
+        print(f"  attempt {att.n} via {att.via}")
         if v.blocked:
-            print(f"  attempt {att.n} via {att.via}")
             print(f"    ✗ BLOCKED · {v.kind} · leaked layer: {v.layer}")
-            print(f"      {v.signal}  →  {v.action}")
+            print(f"      {v.signal}")
+            if att.move not in ("done", ""):
+                print(f"      → {att.move}")
         else:
-            print(f"  attempt {att.n} via {att.via}")
             print(f"    ✓ through · {att.n_candidates} candidate endpoint(s)")
 
     result = resilient_capture(
-        args.url, proxy_mode=args.proxy, proxies_file=args.proxies_file,
-        explicit=args.proxy_str, max_attempts=args.max_attempts,
-        rotate=not args.static, headless=not args.headful, on_attempt=on_attempt)
+        args.url, proxies_file=args.proxies_file, explicit=args.proxy_str,
+        start=args.start, strategy=strategy, max_attempts=args.max_attempts,
+        headless=not args.headful, on_attempt=on_attempt)
 
     print()
     if result.recovered:
@@ -104,11 +105,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")
     heal.add_argument("url")
-    heal.add_argument("--max-attempts", type=int, default=4)
+    heal.add_argument("--strategy", choices=("adaptive", "rotate"), default="adaptive",
+                      help="adaptive = patience-first, layer-driven ladder (default); "
+                           "rotate = fresh exit every attempt (naive)")
+    heal.add_argument("--start", choices=("native", "proxy"), default="native",
+                      help="start on your native IP (default, usually cleanest) or a proxy")
     heal.add_argument("--static", action="store_true",
-                      help="reuse one exit for every attempt (the baseline to beat)")
+                      help="one exit, no escalation — the baseline to beat")
+    heal.add_argument("--max-attempts", type=int, default=4)
+    heal.add_argument("--proxy-str", metavar="ip:port:user:pass",
+                      help="use one explicit proxy as the pool")
+    heal.add_argument("--proxies-file", metavar="PATH",
+                      help="proxies.txt for escalation (or set PROXIES_FILE)")
     heal.add_argument("--headful", action="store_true", help="show the browser window")
-    _add_proxy_flags(heal)
     heal.set_defaults(func=_cmd_heal)
 
     return parser

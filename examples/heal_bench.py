@@ -15,12 +15,12 @@ import argparse
 from hydra.stealth import resilient_capture
 
 
-def run(url, *, rotate, trials, max_attempts, proxies_file):
+def run(url, *, strategy, trials, max_attempts, proxies_file):
     wins = 0
     used = 0
     for t in range(1, trials + 1):
-        r = resilient_capture(url, proxy_mode="file", proxies_file=proxies_file,
-                              max_attempts=max_attempts, rotate=rotate)
+        r = resilient_capture(url, proxies_file=proxies_file, strategy=strategy,
+                              max_attempts=max_attempts)
         used += r.tries
         if r.recovered:
             wins += 1
@@ -37,12 +37,12 @@ def main():
     ap.add_argument("--proxies-file")
     args = ap.parse_args()
 
-    print(f"\n=== STATIC baseline (one exit, reused) — {args.trials} trials ===")
-    s_wins, s_used = run(args.url, rotate=False, trials=args.trials,
+    print(f"\n=== STATIC baseline (one exit, no escalation) — {args.trials} trials ===")
+    s_wins, s_used = run(args.url, strategy="static", trials=args.trials,
                          max_attempts=args.max_attempts, proxies_file=args.proxies_file)
 
-    print(f"\n=== ADAPTIVE (rotate exit each attempt) — {args.trials} trials ===")
-    a_wins, a_used = run(args.url, rotate=True, trials=args.trials,
+    print(f"\n=== ADAPTIVE (patience-first, layer-driven ladder) — {args.trials} trials ===")
+    a_wins, a_used = run(args.url, strategy="adaptive", trials=args.trials,
                          max_attempts=args.max_attempts, proxies_file=args.proxies_file)
 
     print("\n" + "=" * 48)

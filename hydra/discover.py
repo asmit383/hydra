@@ -88,26 +88,38 @@ def _looks_like_data(data) -> bool:
     return False
 
 
+def _challenge_title(title: str) -> str | None:
+    """Return the matched challenge-title substring, or None if the title is normal."""
+    low = title.lower()
+    return next((t for t in _BLOCK_TITLES if t in low), None)
+
+
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
-            headless: bool = True) -> CaptureResult:
+            headless: bool = True, challenge_wait_ms: int = 6000) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
-    native ISP IP. This is the full result the healer diagnoses; `discover()` is
-    the thin wrapper that only wants the candidates."""
+    native ISP IP. If a JS challenge (DataDome/Cloudflare "just a moment") is up
+    after load, wait up to `challenge_wait_ms` for it to auto-solve before judging
+    — Camoufox passes these if you let the challenge JS finish (the Prospector
+    tactic). Blocked/not is decided from the *terminal* state, so a challenge that
+    clears isn't a false positive. `discover()` is the thin candidates-only wrapper."""
     candidates: list[ApiCandidate] = []
     seen: set[str] = set()
-    block: set[str] = set()
+    challenge_hosts: set[str] = set()
 
     def on_response(response):
         # This IS "the handler": Camoufox calls it for EVERY response automatically.
         u = response.url
         low = u.lower()
-        # block detection runs on every response, independent of the noise/JSON gates
+        # record challenge hosts seen (to *name* a block) and never treat the
+        # interstitial's own JSON as a data candidate.
+        is_block = False
         for b in _BLOCK_HOSTS:
             if b in low:
-                block.add(f"host:{b}")
-        if u in seen or _is_noise(u):
+                challenge_hosts.add(b)
+                is_block = True
+        if is_block or u in seen or _is_noise(u):
             return
         # cheap filter first: content-type must smell like JSON
         ctype = (response.headers or {}).get("content-type", "").lower()
@@ -148,21 +160,43 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         page.wait_for_timeout(wait_ms)            # let lazy / on-scroll XHR fire
         try:
             title = page.title()
+        except Exception:
+            pass
+        # patience: if a JS challenge is up, give it time to auto-solve before we
+        # judge — poll the title until it stops looking like an interstitial.
+        if _challenge_title(title) and challenge_wait_ms > 0:
+            waited, step = 0, 1500
+            while waited < challenge_wait_ms:
+                page.wait_for_timeout(step)
+                waited += step
+                try:
+                    title = page.title()
+                except Exception:
+                    pass
+                if not _challenge_title(title):
+                    break                          # challenge cleared → through
+        try:
             final_url = page.url
         except Exception:
             pass
 
-    # fold the non-network signals in (status of the main doc, challenge-page title)
-    if nav_status in (403, 429, 503):
-        block.add(f"status:{nav_status}")
-    low_title = title.lower()
-    for t in _BLOCK_TITLES:
-        if t in low_title:
-            block.add(f"title:{t}")
-
     # biggest data blob first — most likely the real listing/data endpoint
     candidates.sort(key=lambda c: c.size, reverse=True)
-    return CaptureResult(candidates, nav_status, final_url, title, sorted(block))
+
+    # Decide blocked from the TERMINAL state, not a challenge that already cleared.
+    # Real data captured → we're through, full stop. Otherwise a lingering challenge
+    # title, or a hard status with no data, means blocked — name it from hosts seen.
+    block: list[str] = []
+    title_hit = _challenge_title(title)
+    terminal_blocked = bool(title_hit) or (nav_status in (403, 429, 503) and not candidates)
+    if terminal_blocked:
+        block = [f"host:{h}" for h in sorted(challenge_hosts)]
+        if title_hit:
+            block.append(f"title:{title_hit}")
+        if nav_status in (403, 429, 503):
+            block.append(f"status:{nav_status}")
+
+    return CaptureResult(candidates, nav_status, final_url, title, block)
 
 
 def discover(url: str, proxy: dict | None = None, wait_ms: int = 3500,
