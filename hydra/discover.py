@@ -11,8 +11,9 @@ stays the thin "just give me the candidates" entry point.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from hydra.embed import EmbeddedBlob, extract_embedded
 from hydra.session import launch
 
 
@@ -60,6 +61,7 @@ class CaptureResult:
     final_url: str            # where we ended up (redirects/interstitials move it)
     title: str                # page <title> (challenge pages have telltale titles)
     block_signals: list[str]  # e.g. ["host:captcha-delivery.com", "status:403"]
+    embedded: list[EmbeddedBlob] = field(default_factory=list)  # SSR-inlined data (v0.1.1)
 
 
 def _is_noise(url: str) -> bool:
@@ -150,6 +152,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     nav_status: int | None = None
     final_url = url
     title = ""
+    html = ""
     with launch(proxy=proxy, headless=headless) as page:
         page.on("response", on_response)          # register BEFORE navigating!
         try:
@@ -177,11 +180,15 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                     break                          # challenge cleared → through
         try:
             final_url = page.url
+            html = page.content()
         except Exception:
             pass
 
     # biggest data blob first — most likely the real listing/data endpoint
     candidates.sort(key=lambda c: c.size, reverse=True)
+
+    # SSR fallback: if no XHR API fired, the data may be inlined in the HTML.
+    embedded = extract_embedded(html) if (html and not candidates) else []
 
     # Decide blocked from the TERMINAL state, not a challenge that already cleared.
     # Real data captured → we're through, full stop. Otherwise a lingering challenge
@@ -196,7 +203,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         if nav_status in (403, 429, 503):
             block.append(f"status:{nav_status}")
 
-    return CaptureResult(candidates, nav_status, final_url, title, block)
+    return CaptureResult(candidates, nav_status, final_url, title, block, embedded)
 
 
 def discover(url: str, proxy: dict | None = None, wait_ms: int = 3500,

@@ -12,7 +12,7 @@ import argparse
 import json
 import sys
 
-from hydra.discover import discover
+from hydra.discover import capture
 from hydra.session import pick_proxy
 from hydra.stealth import resilient_capture
 
@@ -32,29 +32,41 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     via = "native ISP IP" if proxy is None else proxy["server"]
 
     if args.json:
-        candidates = discover(args.url, proxy=proxy, headless=not args.headful)
-        print(json.dumps([c.__dict__ for c in candidates], default=str, indent=2))
-        return 0 if candidates else 1
+        r = capture(args.url, proxy=proxy, headless=not args.headful)
+        out = {"candidates": [c.__dict__ for c in r.candidates],
+               "embedded": [b.__dict__ for b in r.embedded]}
+        print(json.dumps(out, default=str, indent=2))
+        return 0 if (r.candidates or r.embedded) else 1
 
     print(f"→ discovering internal APIs on {args.url}  (via {via}) ...\n")
-    candidates = discover(args.url, proxy=proxy, headless=not args.headful)
+    r = capture(args.url, proxy=proxy, headless=not args.headful)
 
-    if not candidates:
-        print("no internal JSON API found — the site may be server-rendered "
-              "(the HTML *is* the data), or the API fires on interaction (v0.1.1).")
-        return 1
+    if r.candidates:
+        print(f"found {len(r.candidates)} candidate endpoint(s), biggest first:\n")
+        for i, c in enumerate(r.candidates, 1):
+            print(f"[{i}] {c.method} {c.url}")
+            print(f"    status {c.status} · {c.size:,} bytes · {c.shape}")
+            auth = [k for k in c.request_headers
+                    if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
+            if auth:
+                print(f"    auth headers present: {auth}")
+            print(f"    sample: {json.dumps(c.sample, default=str)[:160]}")
+            print()
+        return 0
 
-    print(f"found {len(candidates)} candidate endpoint(s), biggest first:\n")
-    for i, c in enumerate(candidates, 1):
-        print(f"[{i}] {c.method} {c.url}")
-        print(f"    status {c.status} · {c.size:,} bytes · {c.shape}")
-        auth = [k for k in c.request_headers
-                if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
-        if auth:
-            print(f"    auth headers present: {auth}")
-        print(f"    sample: {json.dumps(c.sample, default=str)[:160]}")
-        print()
-    return 0
+    if r.embedded:
+        print("no XHR API — data is SSR-embedded in the HTML. Inlined blob(s), "
+              "biggest record set first:\n")
+        for i, b in enumerate(r.embedded, 1):
+            print(f"[{i}] {b.kind} · {b.size:,} bytes")
+            print(f"    {b.records_count} records at  {b.records_path}")
+            print(f"    sample: {json.dumps(b.sample, default=str)[:160]}")
+            print()
+        return 0
+
+    print("no internal JSON API found and no inlined data blob — the API may fire "
+          "on interaction (scroll/click), or the page is behind a block.")
+    return 1
 
 
 def _cmd_heal(args: argparse.Namespace) -> int:
