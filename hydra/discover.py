@@ -24,6 +24,7 @@ _NOISE = (
     "clarity.ms", "gstatic.com", "googleapis.com", "recaptcha", "/fonts",
     "fonts.", "cdn.jsdelivr", "unpkg.com", "bat.bing",
     "cookielaw.org", "onetrust", "cookiebot", "usercentrics",  # consent/CMP config
+    "adobedc.net", "demdex.net", "omtrdc.net",  # Adobe Experience Cloud tracking
 )
 
 # Hosts/paths that mean "you got challenged", not "here's your data". Kept separate
