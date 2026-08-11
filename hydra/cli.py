@@ -14,7 +14,7 @@ import os
 import sys
 
 from hydra.discover import capture
-from hydra.session import pick_proxy
+from hydra.session import load_proxies, pick_proxy
 from hydra.stealth import resilient_capture
 
 # --- terminal colors (auto-off when piped / NO_COLOR) --------------------------
@@ -60,6 +60,14 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         heal_kw = dict(start="native", proxies_file=None)
     else:  # auto
         heal_kw = dict(start="native", proxies_file=args.proxies_file)
+
+    # if a proxy file/rotation was requested but resolves to nothing, say so —
+    # don't silently fall back to native and pretend to "rotate".
+    if not args.proxy_str and (args.proxies_file or args.proxy == "file") \
+            and not load_proxies(args.proxies_file):
+        src = args.proxies_file or os.getenv("PROXIES_FILE") or "./proxies.txt"
+        print(f"{yellow('⚠')} no proxies loaded from {bold(src)} — "
+              f"running on native IP. Check the path / file contents.\n")
 
     attempts = 1 if args.no_heal else args.attempts
     if not args.json:
