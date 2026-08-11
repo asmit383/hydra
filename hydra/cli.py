@@ -62,6 +62,26 @@ def _preview(o, n: int = 256) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+_JSON_TOK = re.compile(
+    r'("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+\.?\d*(?:[eE][+-]?\d+)?)|\b(true|false|null)\b')
+
+
+def _color_json(s: str) -> str:
+    """Syntax-highlight a JSON string for the terminal (no-op when piped/NO_COLOR)."""
+    if not _COLOR:
+        return s
+
+    def sub(m):
+        string, colon, number, kw = m.groups()
+        if string is not None:
+            return cyan(string) + colon if colon else green(string)  # key vs value
+        if number is not None:
+            return yellow(number)
+        return magenta(m.group(0))  # true/false/null
+
+    return _JSON_TOK.sub(sub, s)
+
+
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--proxy", choices=("native", "file", "explicit"), default="native",
                    help="native = your ISP IP (default); file = random from proxies.txt; "
@@ -150,7 +170,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         for j, b in enumerate(r.embedded, len(r.candidates) + 1):
             out.append({"n": j, "kind": b.kind, "records": b.records_count,
                         "size": b.size, "path": b.records_path, "sample": _preview(b.sample)})
-        print(json.dumps(out, default=str, indent=2))
+        print(_color_json(json.dumps(out, default=str, indent=2)))
         return 0 if out else 1
 
     # ---- pretty view (--pretty) -------------------------------------------------
