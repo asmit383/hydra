@@ -66,6 +66,10 @@ Trackers, analytics, fonts, consent/CMP config, and payment SDKs are filtered ou
 automatically. Each API candidate is captured **with its request + auth headers**,
 so it can be replayed.
 
+It also **doesn't trust `content-type`** — JSON served as `text/plain` or
+`text/html` (common on legacy Java/PHP/enterprise backends) is captured too, not
+silently dropped.
+
 ## Self-healing through blocks
 
 `capture` heals automatically. To *watch* the diagnosis (useful for demos), use `heal`:
@@ -89,14 +93,35 @@ measures adaptive-vs-static recovery rate.
 
 ## Proxies
 
+Point Hydra at a proxy file or a single proxy — the mode is **inferred**, so you
+don't pass `--proxy` yourself:
+
 ```bash
-hydra capture <url>                                   # auto: native, escalate if blocked
-hydra capture <url> --proxy file                      # start on a random proxies.txt exit
-hydra capture <url> --proxy explicit --proxy-str ip:port:user:pass
-PROXIES_FILE=./proxies.txt hydra capture <url> --proxy file
+hydra capture <url>                                # native IP, escalate to proxies only if blocked
+hydra capture <url> --proxies-file p.txt           # rotate through a proxy file (any name)
+hydra capture <url> --proxy-str ip:port:user:pass  # one explicit proxy
+hydra capture <url> --proxy native                 # force native only (no proxy)
 ```
-`proxies.txt` is one `ip:port:user:pass` per line. Geoip is auto-aligned to the
+A proxy file is one `ip:port:user:pass` (or `ip:port`) per line; `--proxies-file`
+defaults to `./proxies.txt` (or `$PROXIES_FILE`). Geoip is auto-aligned to the
 proxy's exit IP so timezone/locale match where the traffic appears to come from.
+
+> Proxy files hold credentials — keep them out of the repo. The default
+> `proxies.txt` / `proxies*.txt` are gitignored; a custom name is **not**, so add
+> it to `.gitignore` if you name it something else.
+
+## Geo-gated / thin results
+
+A wrong-country exit often returns a **200 that's thin** — the page renders but
+withholds the real data. That's not a *block*, so self-heal won't fire on its own.
+Tell Hydra what "good" looks like and it rotates exits until it gets there:
+
+```bash
+hydra capture <url> --proxies-file p.txt --min-endpoints 5    # until ≥5 endpoints fire
+hydra capture <url> --proxies-file p.txt --expect /api/items  # until an endpoint URL matches
+```
+`--min-endpoints` needs no endpoint name (use it during discovery); `--expect`
+targets a known endpoint. Pair with `--attempts N` to bound the hunt.
 
 ## Behind a login
 
@@ -112,17 +137,21 @@ The session file holds cookies + tokens — it's a **credential**. Hydra writes 
 ## Options (capture)
 | flag | what |
 |---|---|
-| `--proxy auto\|native\|file\|explicit` | where to start / escalation pool (default `auto`) |
+| `--proxies-file PATH` | rotate through a proxy file (implies proxy mode) |
+| `--proxy-str ip:port:user:pass` | one explicit proxy (implies proxy mode) |
+| `--proxy auto\|native\|file\|explicit` | force a mode (default `auto`: native, escalate if blocked) |
+| `--min-endpoints N` / `--expect SUBSTR` | rotate exits until the result is rich / a wanted endpoint fires |
 | `--attempts N` / `--no-heal` | max self-heal attempts / single-shot |
 | `--no-interact` / `--scrolls N` | skip or tune the scroll pass |
-| `--state PATH` | capture with a saved login session |
-| `--json` | emit candidates + inlined blobs as JSON |
-| `--headful` | show the browser window |
+| `--state PATH` | capture with a saved login session (`hydra login`) |
+| `--json` / `--headful` | JSON output / show the browser window |
 
 ## Status
-🚧 Early, but the core works: discovery (API + SSR + RSC), self-healing, proxies,
-and authenticated capture. See `phases.md`. Next: a browser-free replay client
-(`hydra gen`) and typed-search interaction.
+🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
+content-type), self-healing through blocks, proxies with geo-gated retry, and
+authenticated capture. Not yet covered: **WebSocket/SSE** (live/streaming data),
+typed-search, and click-gated data — see `phases.md`. Next: a browser-free replay
+client (`hydra gen`).
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
 spoofing. Hydra is the *adaptive* layer above it.
