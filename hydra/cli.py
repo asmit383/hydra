@@ -27,7 +27,7 @@ def _c(code: str, s: str) -> str:
 
 
 def bold(s):   return _c("1", s)
-def dim(s):    return _c("2", s)
+def dim(s):    return s   # no faded gray anywhere — normal text (bold or normal only)
 def red(s):    return _c("31", s)
 def green(s):  return _c("32", s)
 def yellow(s): return _c("33", s)
