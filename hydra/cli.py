@@ -14,7 +14,7 @@ import os
 import sys
 
 from hydra.discover import capture
-from hydra.session import load_proxies, pick_proxy
+from hydra.session import load_proxies, parse_proxy, pick_proxy
 from hydra.stealth import resilient_capture
 
 # --- terminal colors (auto-off when piped / NO_COLOR) --------------------------
@@ -61,13 +61,23 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     else:  # auto
         heal_kw = dict(start="native", proxies_file=args.proxies_file)
 
-    # if a proxy file/rotation was requested but resolves to nothing, say so —
-    # don't silently fall back to native and pretend to "rotate".
-    if not args.proxy_str and (args.proxies_file or args.proxy == "file") \
-            and not load_proxies(args.proxies_file):
-        src = args.proxies_file or os.getenv("PROXIES_FILE") or "./proxies.txt"
-        print(f"{yellow('⚠')} no proxies loaded from {bold(src)} — "
-              f"running on native IP. Check the path / file contents.\n")
+    # If you EXPLICITLY asked for a proxy but none resolves, abort — never silently
+    # fall back to your native IP (that can leak your real IP on a geo-locked/client
+    # site). Only `--proxy auto` (the default, nothing requested) uses native freely.
+    if args.proxy_str:
+        if not parse_proxy(args.proxy_str):
+            print(f"{red('✗')} invalid --proxy-str {bold(args.proxy_str)} "
+                  f"{dim('(expected ip:port:user:pass or ip:port)')}.")
+            return 2
+    elif args.proxy == "explicit":
+        print(f"{red('✗')} --proxy explicit needs --proxy-str ip:port:user:pass.")
+        return 2
+    elif args.proxies_file or args.proxy == "file":
+        if not load_proxies(args.proxies_file):
+            src = args.proxies_file or os.getenv("PROXIES_FILE") or "./proxies.txt"
+            print(f"{red('✗')} you asked for a proxy but none loaded from {bold(src)} — "
+                  f"aborting {dim('(refusing to fall back to your native IP)')}.")
+            return 2
 
     attempts = 1 if args.no_heal else args.attempts
     if not args.json:
