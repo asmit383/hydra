@@ -56,25 +56,10 @@ def _endpoint_name(url: str) -> str:
     return url.split("?")[0].rstrip("/").split("/")[-1] or url
 
 
-def _cap(o, maxstr: int = 160, maxitems: int = 3, depth: int = 0):
-    """Bound a sample so output stays small — it's a *preview*, not the payload.
-    Truncate long strings, cap list/dict width and depth."""
-    if isinstance(o, str):
-        return o if len(o) <= maxstr else o[:maxstr] + "…"
-    if depth >= 4:
-        return "…"
-    if isinstance(o, list):
-        out = [_cap(x, maxstr, maxitems, depth + 1) for x in o[:maxitems]]
-        if len(o) > maxitems:
-            out.append(f"…+{len(o) - maxitems} more")
-        return out
-    if isinstance(o, dict):
-        items = list(o.items())
-        out = {k: _cap(v, maxstr, maxitems, depth + 1) for k, v in items[:maxitems * 3]}
-        if len(items) > maxitems * 3:
-            out["…"] = f"+{len(items) - maxitems * 3} more keys"
-        return out
-    return o
+def _preview(o, n: int = 256) -> str:
+    """A bounded string preview of a sample — it's a preview, not the payload."""
+    s = json.dumps(o, default=str)
+    return s if len(s) <= n else s[:n] + "…"
 
 
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
@@ -155,15 +140,16 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             print(f"{yellow('⚠')} did not reach {want} after {r.tries} attempt(s) — "
                   f"emitting what fired", file=sys.stderr)
         out = []
-        for c in r.candidates:
-            d = {"method": c.method, "url": c.url, "status": c.status, "size": c.size,
-                 "shape": c.shape, "auth": _auth(c), "sample": _cap(c.sample)}
+        for i, c in enumerate(r.candidates, 1):
+            d = {"n": i, "method": c.method, "url": c.url, "status": c.status,
+                 "size": c.size, "shape": c.shape, "auth": _auth(c),
+                 "sample": _preview(c.sample)}
             if c.post_data:
-                d["post_data"] = c.post_data[:300]
+                d["post_data"] = c.post_data[:256]
             out.append(d)
-        for b in r.embedded:
-            out.append({"kind": b.kind, "records": b.records_count, "size": b.size,
-                        "path": b.records_path, "sample": _cap(b.sample)})
+        for j, b in enumerate(r.embedded, len(r.candidates) + 1):
+            out.append({"n": j, "kind": b.kind, "records": b.records_count,
+                        "size": b.size, "path": b.records_path, "sample": _preview(b.sample)})
         print(json.dumps(out, default=str, indent=2))
         return 0 if out else 1
 
