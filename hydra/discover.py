@@ -74,11 +74,16 @@ def _is_noise(url: str) -> bool:
 
 
 def _shape(data) -> tuple[str, object]:
-    """Human-readable shape + a small sample of a parsed JSON body."""
+    """Human-readable shape + a small sample of a parsed JSON body. For dicts,
+    surface the *data-bearing* keys (whose values are non-empty lists/dicts) first,
+    so envelope APIs preview the records instead of {"Success": true, ...}."""
     if isinstance(data, list):
         return f"list[{len(data)}]", data[:2]
     if isinstance(data, dict):
-        return f"dict({len(data)} keys)", {k: data[k] for k in list(data)[:5]}
+        keys = list(data)
+        rich = [k for k in keys if isinstance(data[k], (list, dict)) and data[k]]
+        pick = (rich + [k for k in keys if k not in rich])[:5]
+        return f"dict({len(data)} keys)", {k: data[k] for k in pick}
     return type(data).__name__, data
 
 

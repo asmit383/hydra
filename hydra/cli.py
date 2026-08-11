@@ -15,6 +15,7 @@ import re
 import sys
 
 from hydra.discover import capture
+from hydra.gen import generate_client
 from hydra.session import load_proxies, parse_proxy, pick_proxy
 from hydra.stealth import resilient_capture
 
@@ -285,6 +286,46 @@ def _cmd_login(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gen(args: argparse.Namespace) -> int:
+    # proxy: explicit str / file, else native (same abort-don't-leak-native rule)
+    if args.proxy_str:
+        if not parse_proxy(args.proxy_str):
+            print(f"{red('✗')} invalid --proxy-str {bold(args.proxy_str)}.", file=sys.stderr)
+            return 2
+        heal_kw = dict(start="proxy", explicit=args.proxy_str)
+    elif args.proxies_file:
+        if not load_proxies(args.proxies_file):
+            print(f"{red('✗')} no proxies loaded from {bold(args.proxies_file)} — aborting.",
+                  file=sys.stderr)
+            return 2
+        heal_kw = dict(start="proxy", proxies_file=args.proxies_file)
+    else:
+        heal_kw = dict(start="native", proxies_file=args.proxies_file)
+
+    print(f"{cyan('🐍 hydra')} {bold('gen')} {args.url}  (discovering …)", file=sys.stderr)
+    r = resilient_capture(args.url, max_attempts=args.attempts, headless=not args.headful,
+                          storage_state=args.state, min_candidates=args.min_endpoints, **heal_kw)
+
+    cands = r.candidates
+    if args.endpoint:
+        cands = [c for c in cands if args.endpoint.lower() in c.url.lower()]
+    if not cands:
+        which = f" matching '{args.endpoint}'" if args.endpoint else ""
+        print(f"{red('✗')} no endpoints{which} to generate from.", file=sys.stderr)
+        return 1
+
+    code = generate_client(args.url, cands)
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            f.write(code)
+        os.chmod(args.out, 0o600)   # embeds captured auth — owner-only
+        print(f"{green('✓')} wrote {bold(args.out)} · {len(cands)} endpoint(s) · "
+              f"chmod 600 {dim('(holds auth — keep secret)')}", file=sys.stderr)
+    else:
+        print(code)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hydra",
@@ -332,6 +373,19 @@ def build_parser() -> argparse.ArgumentParser:
                        help="log in through this proxy (match the exit you'll capture from)")
     login.add_argument("--lang", default="en-US", help="UI locale for the login window")
     login.set_defaults(func=_cmd_login)
+
+    gen = sub.add_parser("gen", help="generate a browser-free replay client from a capture")
+    gen.add_argument("url")
+    gen.add_argument("--endpoint", metavar="SUBSTR",
+                     help="only generate for endpoints whose URL contains this")
+    gen.add_argument("--out", metavar="PATH", help="write the client to a file (default: print)")
+    gen.add_argument("--proxies-file", metavar="PATH", help="proxy file (implies proxy mode)")
+    gen.add_argument("--proxy-str", metavar="ip:port:user:pass", help="one explicit proxy")
+    gen.add_argument("--min-endpoints", type=int, default=1, metavar="N")
+    gen.add_argument("--attempts", type=int, default=3)
+    gen.add_argument("--state", metavar="PATH", help="saved login session (hydra login)")
+    gen.add_argument("--headful", action="store_true")
+    gen.set_defaults(func=_cmd_gen)
 
     heal = sub.add_parser("heal", help="capture with self-healing through blocks (v0.2)")
     heal.add_argument("url")
