@@ -31,6 +31,7 @@ def dim(s):    return s   # no faded gray anywhere — normal text (bold or norm
 def red(s):    return _c("31", s)
 def green(s):  return _c("32", s)
 def yellow(s): return _c("33", s)
+def blue(s):   return _c("34", s)
 def cyan(s):   return _c("36", s)
 def magenta(s): return _c("35", s)
 
@@ -74,10 +75,11 @@ def _color_json(s: str) -> str:
     def sub(m):
         string, colon, number, kw = m.groups()
         if string is not None:
-            return cyan(string) + colon if colon else green(string)  # key vs value
+            # keys: bold blue (pops on light bg); string values: bold green
+            return bold(blue(string)) + colon if colon else bold(green(string))
         if number is not None:
-            return yellow(number)
-        return magenta(m.group(0))  # true/false/null
+            return bold(magenta(number))
+        return bold(red(m.group(0)))  # true/false/null
 
     return _JSON_TOK.sub(sub, s)
 
