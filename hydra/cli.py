@@ -89,65 +89,81 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     if args.proxy_str:
         if not parse_proxy(args.proxy_str):
             print(f"{red('✗')} invalid --proxy-str {bold(args.proxy_str)} "
-                  f"{dim('(expected ip:port:user:pass or ip:port)')}.")
+                  f"(expected ip:port:user:pass or ip:port).", file=sys.stderr)
             return 2
     elif args.proxy == "explicit":
-        print(f"{red('✗')} --proxy explicit needs --proxy-str ip:port:user:pass.")
+        print(f"{red('✗')} --proxy explicit needs --proxy-str ip:port:user:pass.", file=sys.stderr)
         return 2
     elif args.proxies_file or args.proxy == "file":
         if not load_proxies(args.proxies_file):
             src = args.proxies_file or os.getenv("PROXIES_FILE") or "./proxies.txt"
             print(f"{red('✗')} you asked for a proxy but none loaded from {bold(src)} — "
-                  f"aborting {dim('(refusing to fall back to your native IP)')}.")
+                  f"aborting (refusing to fall back to your native IP).", file=sys.stderr)
             return 2
 
     attempts = 1 if args.no_heal else args.attempts
-    if not args.json:
-        heal = "no-heal" if args.no_heal else f"self-healing · up to {attempts} attempts"
-        print(f"{cyan('🐍 hydra')} {bold('capture')} {args.url}  {dim('(' + heal + ')')}\n")
+    use_json = args.json or not args.pretty
+    ps = sys.stderr if use_json else sys.stdout   # progress → stderr in json mode
+
+    heal = "no-heal" if args.no_heal else f"self-healing · up to {attempts} attempts"
+    print(f"{cyan('🐍 hydra')} {bold('capture')} {args.url}  ({heal})\n", file=ps)
 
     def on_attempt(att):
         # stay quiet on a clean first hit; narrate only when actually healing
-        via = dim(att.via)
         if att.verdict.blocked:
-            print(f"  {red('✗')} {dim(f'attempt {att.n}')} {via}  "
-                  f"{red(att.verdict.kind)} {dim('· layer ' + att.verdict.layer)} {dim('→')} {yellow(att.move)}")
+            print(f"  {red('✗')} attempt {att.n} {att.via}  "
+                  f"{red(att.verdict.kind)} · layer {att.verdict.layer} → {yellow(att.move)}", file=ps)
         elif "rotate exit" in att.move:
-            print(f"  {yellow('~')} {dim(f'attempt {att.n}')} {via}  {yellow(att.move)}")
+            print(f"  {yellow('~')} attempt {att.n} {att.via}  {yellow(att.move)}", file=ps)
         elif att.n > 1:
-            print(f"  {green('✓')} {dim(f'attempt {att.n}')} {via}  {green('through')}")
+            print(f"  {green('✓')} attempt {att.n} {att.via}  {green('through')}", file=ps)
 
     r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
                           interact=not args.no_interact, scroll_steps=args.scrolls,
                           storage_state=args.state, expect=args.expect,
                           min_candidates=args.min_endpoints, on_attempt=on_attempt, **heal_kw)
 
-    if args.json:
-        out = {"candidates": [c.__dict__ for c in r.candidates],
-               "embedded": [b.__dict__ for b in r.embedded]}
-        print(json.dumps(out, default=str, indent=2))
-        return 0 if (r.candidates or r.embedded) else 1
+    def _auth(c):
+        return [k for k in c.request_headers
+                if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
 
+    # ---- JSON output (default) — a clean array to stdout, progress on stderr ----
+    if use_json:
+        if not r.recovered:
+            want = f"'{args.expect}'" if args.expect else f"{args.min_endpoints}+ endpoints"
+            print(f"{yellow('⚠')} did not reach {want} after {r.tries} attempt(s) — "
+                  f"emitting what fired", file=sys.stderr)
+        out = []
+        for c in r.candidates:
+            d = {"method": c.method, "url": c.url, "status": c.status, "size": c.size,
+                 "shape": c.shape, "auth": _auth(c), "sample": c.sample}
+            if c.post_data:
+                d["post_data"] = c.post_data
+            out.append(d)
+        for b in r.embedded:
+            out.append({"kind": b.kind, "records": b.records_count, "size": b.size,
+                        "path": b.records_path, "sample": b.sample})
+        print(json.dumps(out, default=str, indent=2))
+        return 0 if out else 1
+
+    # ---- pretty view (--pretty) -------------------------------------------------
     if not r.recovered:
         want = f"'{args.expect}'" if args.expect else f"{args.min_endpoints}+ endpoints"
         if (args.expect or args.min_endpoints > 1) and (r.candidates or r.embedded):
-            print(f"\n{yellow('⚠')} never reached {yellow(want)} after {r.tries} exit(s) — showing what "
-                  f"did fire {dim('(raise --attempts, or pin an in-country --proxy-str)')}\n")
+            print(f"\n{yellow('⚠')} never reached {yellow(want)} after {r.tries} exit(s) — showing what did fire\n")
         else:
-            print(f"\n{red('✗ blocked')} after {r.tries} attempt(s) {dim('· last: ' + r.attempts[-1].verdict.kind)}. "
-                  f"{dim('Try --proxies-file, or raise --attempts.')}")
+            print(f"\n{red('✗ blocked')} after {r.tries} attempt(s) · last: {r.attempts[-1].verdict.kind}. "
+                  f"Try --proxies-file, or raise --attempts.")
             return 1
 
     big = [b for b in r.embedded if b.records_count >= 5]
 
     def _print_candidate(i, c):
-        auth = [k for k in c.request_headers
-                if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
         status = "" if c.status == 200 else f" · {red(str(c.status))}"
+        keys = (green('🔑 ' + ','.join(_auth(c))) + '   ' if _auth(c) else '')
         print(f"{bold(green(f'[{i}]'))} {bold(c.method)} {bold(cyan(_endpoint_name(c.url)))}"
               f"   {bold(yellow(f'{c.size:,} B'))} · {c.shape}{status}")
         print(f"    {bold(cyan(c.url))}")
-        keys = (green('🔑 ' + ','.join(auth)) + '   ' if auth else '')
         print(f"    {keys}{json.dumps(c.sample, default=str)[:120]}\n")
 
     def _print_blob(tag, b):
@@ -259,7 +275,10 @@ def build_parser() -> argparse.ArgumentParser:
     cap.add_argument("--attempts", type=int, default=3, help="max self-heal attempts")
     cap.add_argument("--no-heal", action="store_true",
                      help="single shot — don't heal through a block")
-    cap.add_argument("--json", action="store_true", help="emit candidates as JSON")
+    cap.add_argument("--json", action="store_true",
+                     help="force JSON output (already the default)")
+    cap.add_argument("--pretty", action="store_true",
+                     help="colored boxed view instead of JSON")
     cap.add_argument("--headful", action="store_true", help="show the browser window")
     cap.add_argument("--no-interact", action="store_true",
                      help="skip the scroll pass (only catch APIs that fire on load)")
