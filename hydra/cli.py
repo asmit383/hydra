@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 from hydra.discover import capture
@@ -32,6 +33,27 @@ def green(s):  return _c("32", s)
 def yellow(s): return _c("33", s)
 def cyan(s):   return _c("36", s)
 def magenta(s): return _c("35", s)
+
+_ANSI = re.compile(r"\033\[[0-9;]*m")
+
+
+def _vis(s: str) -> int:
+    """Visible length, ignoring ANSI color codes."""
+    return len(_ANSI.sub("", s))
+
+
+def _box(title: str, rows: list[str], col=cyan) -> str:
+    """A titled box: ┌─ title ─────┐ / │ rows │ / └────────┘ (ANSI-width aware)."""
+    inner = max([_vis(r) for r in rows] + [_vis(title) + 4])
+    top = col("┌─ ") + bold(title) + " " + col("─" * max(0, inner - _vis(title) - 1) + "┐")
+    body = [col("│ ") + r + " " * (inner - _vis(r)) + col(" │") for r in rows]
+    bot = col("└" + "─" * (inner + 2) + "┘")
+    return "\n".join([top] + body + [bot])
+
+
+def _endpoint_name(url: str) -> str:
+    """The last path segment (getEventoPerMacrogruppo) — the human-readable handle."""
+    return url.split("?")[0].rstrip("/").split("/")[-1] or url
 
 
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
@@ -116,41 +138,43 @@ def _cmd_capture(args: argparse.Namespace) -> int:
                   f"{dim('Try --proxies-file, or raise --attempts.')}")
             return 1
 
-    if r.recovered and r.tries > 1:
-        print(f"  {green('✓ recovered')} in {r.tries} attempts\n")
+    big = [b for b in r.embedded if b.records_count >= 5]
+
+    def _print_candidate(i, c):
+        auth = [k for k in c.request_headers
+                if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
+        status = "" if c.status == 200 else f" · {c.status}"
+        print(f"{green(f'[{i}]')} {bold(c.method)} {cyan(bold(_endpoint_name(c.url)))}"
+              f"   {dim(f'{c.size:,} B · {c.shape}{status}')}")
+        print(f"    {dim(c.url)}")
+        tail = (yellow('🔑 ' + ','.join(auth)) + '  ' if auth else '') + \
+               dim(json.dumps(c.sample, default=str)[:110])
+        print(f"    {tail}\n")
+
+    def _print_blob(tag, b):
+        print(f"{magenta(f'[{tag}]')} {bold(b.kind)}   "
+              f"{dim(f'{b.records_count} records · {b.size:,} B · {b.records_path}')}")
+        print(f"    {dim(json.dumps(b.sample, default=str)[:110])}\n")
 
     if r.candidates:
-        print(f"{green('▸')} found {bold(green(str(len(r.candidates))))} endpoint(s) "
-              f"{dim('· biggest first')}\n")
-        for i, c in enumerate(r.candidates, 1):
-            print(f"{green(f'[{i}]')} {bold(c.method)} {cyan(c.url)}")
-            print(f"    {dim(f'{c.status} · {c.size:,} B · {c.shape}')}")
-            auth = [k for k in c.request_headers
-                    if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
-            if auth:
-                print(f"    {yellow('🔑 auth: ' + ', '.join(auth))}")
-            print(f"    {dim('sample:')} {dim(json.dumps(c.sample, default=str)[:160])}")
-            print()
-        # some sites SSR the main list even while an API serves side content —
-        # surface a substantial inlined blob alongside the API candidates.
-        big = [b for b in r.embedded if b.records_count >= 5]
+        head = f"{len(r.candidates)} endpoint" + ("s" if len(r.candidates) != 1 else "")
         if big:
-            print(f"{magenta('▸')} also inlined in the HTML {dim('(SSR — often the main list)')}\n")
+            head += f" + {len(big)} SSR blob" + ("s" if len(big) != 1 else "")
+        if r.recovered and r.tries > 1:
+            head += f"  ·  recovered in {r.tries}"
+        print(_box(f"🐍 {head}", [dim(args.url)], col=green) + "\n")
+        for i, c in enumerate(r.candidates, 1):
+            _print_candidate(i, c)
+        if big:
+            print(dim("── also inlined in the HTML (SSR) ──") + "\n")
             for i, b in enumerate(big, 1):
-                print(f"{magenta(f'[S{i}]')} {bold(b.kind)} "
-                      f"{dim(f'· {b.size:,} B · {b.records_count} records at {b.records_path}')}")
-                print(f"     {dim('sample:')} {dim(json.dumps(b.sample, default=str)[:140])}")
-                print()
+                _print_blob(f"S{i}", b)
         return 0
 
     if r.embedded:
-        print(f"{magenta('▸')} no XHR API — data is {bold('SSR-embedded')} in the HTML "
-              f"{dim('· biggest record set first')}\n")
+        print(_box(f"🐍 SSR-embedded · {len(r.embedded)} blob(s)", [dim(args.url)], col=magenta) + "\n")
         for i, b in enumerate(r.embedded, 1):
-            print(f"{magenta(f'[{i}]')} {bold(b.kind)} {dim(f'· {b.size:,} B')}")
-            print(f"    {dim(f'{b.records_count} records at {b.records_path}')}")
-            print(f"    {dim('sample:')} {dim(json.dumps(b.sample, default=str)[:160])}")
-            print()
+            _print_blob(i, b)
         return 0
 
     print(f"{yellow('∅')} no internal JSON API and no inlined blob — the API may fire "
