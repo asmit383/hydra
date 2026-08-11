@@ -71,11 +71,15 @@ automation.
 
 ---
 
-## Usability (built discovery, not yet a "tool") ⬜
-- [ ] `client.py` / `hydra gen` — codegen a **browser-free replay client** from a
-      capture, with a one-shot Camoufox re-auth fallback when the token expires.
-      The adoption hook: "point at a site → get a runnable client."
-- [ ] `--out data.json` — save the **full** discovered records, not just a sample.
+## Usability
+- [x] `hydra gen <url>` — codegen a **browser-free replay client** from a capture:
+      one httpx function per endpoint, captured auth embedded, `--out` writes it
+      (chmod 600). "Point at a site → get a runnable client." Verified end-to-end.
+- [x] JSON output by default (numbered, sample capped, syntax-highlighted); the
+      colored boxed view is `--pretty`.
+- [ ] One-shot Camoufox re-auth fallback inside the generated client when the
+      token expires (currently: re-run `hydra gen`).
+- [ ] `--out data.json` on `capture` — save the **full** records, not just samples.
 - [ ] Collapse paginated `?page=1..N` candidates into one parameterized endpoint.
 
 ## Credibility ⬜

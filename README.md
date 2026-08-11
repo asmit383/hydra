@@ -139,6 +139,17 @@ hydra capture <url> --proxies-file p.txt --expect /api/items  # until an endpoin
 `--min-endpoints` needs no endpoint name (use it during discovery); `--expect`
 targets a known endpoint. Pair with `--attempts N` to bound the hunt.
 
+## From capture to a runnable client — `hydra gen`
+
+Turn a discovery into a standalone, browser-free scraper:
+```bash
+hydra gen <url> --endpoint /api/items --out client.py
+python client.py            # fetches the data with httpx — no browser
+```
+It emits one `httpx` function per discovered endpoint with the captured auth
+(cookies / bearer / api-key) embedded, so it works immediately. The file holds
+credentials — it's written `chmod 600`; re-run `hydra gen` when the auth expires.
+
 ## Behind a login
 
 Data behind an auth wall is invisible to a logged-out browser. Log in once by
@@ -165,10 +176,10 @@ The session file holds cookies + tokens — it's a **credential**. Hydra writes 
 
 ## Status
 🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
-content-type), self-healing through blocks, proxies with geo-gated retry, and
-authenticated capture. Not yet covered: **WebSocket/SSE** (live/streaming data),
-typed-search, and click-gated data — see `phases.md`. Next: a browser-free replay
-client (`hydra gen`).
+content-type), self-healing through blocks, proxies with geo-gated retry,
+authenticated capture, and **`hydra gen`** (browser-free client codegen). Not yet
+covered: **WebSocket/SSE** (live/streaming data), typed-search, and click-gated
+data — see `phases.md`.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
 spoofing. Hydra is the *adaptive* layer above it.
