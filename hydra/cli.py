@@ -143,18 +143,17 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     def _print_candidate(i, c):
         auth = [k for k in c.request_headers
                 if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
-        status = "" if c.status == 200 else f" · {c.status}"
-        print(f"{green(f'[{i}]')} {bold(c.method)} {cyan(bold(_endpoint_name(c.url)))}"
-              f"   {dim(f'{c.size:,} B · {c.shape}{status}')}")
-        print(f"    {dim(c.url)}")
-        tail = (yellow('🔑 ' + ','.join(auth)) + '  ' if auth else '') + \
-               dim(json.dumps(c.sample, default=str)[:110])
-        print(f"    {tail}\n")
+        status = "" if c.status == 200 else f" · {red(str(c.status))}"
+        print(f"{bold(green(f'[{i}]'))} {bold(c.method)} {bold(cyan(_endpoint_name(c.url)))}"
+              f"   {bold(yellow(f'{c.size:,} B'))} · {c.shape}{status}")
+        print(f"    {bold(cyan(c.url))}")
+        keys = (green('🔑 ' + ','.join(auth)) + '   ' if auth else '')
+        print(f"    {keys}{json.dumps(c.sample, default=str)[:120]}\n")
 
     def _print_blob(tag, b):
-        print(f"{magenta(f'[{tag}]')} {bold(b.kind)}   "
-              f"{dim(f'{b.records_count} records · {b.size:,} B · {b.records_path}')}")
-        print(f"    {dim(json.dumps(b.sample, default=str)[:110])}\n")
+        print(f"{bold(magenta(f'[{tag}]'))} {bold(b.kind)}   "
+              f"{bold(yellow(f'{b.records_count} records'))} · {b.size:,} B · {b.records_path}")
+        print(f"    {json.dumps(b.sample, default=str)[:120]}\n")
 
     if r.candidates:
         head = f"{len(r.candidates)} endpoint" + ("s" if len(r.candidates) != 1 else "")
@@ -162,17 +161,17 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             head += f" + {len(big)} SSR blob" + ("s" if len(big) != 1 else "")
         if r.recovered and r.tries > 1:
             head += f"  ·  recovered in {r.tries}"
-        print(_box(f"🐍 {head}", [dim(args.url)], col=green) + "\n")
+        print(_box(f"🐍 {head}", [bold(args.url)], col=green) + "\n")
         for i, c in enumerate(r.candidates, 1):
             _print_candidate(i, c)
         if big:
-            print(dim("── also inlined in the HTML (SSR) ──") + "\n")
+            print(bold(magenta("── also inlined in the HTML (SSR) ──")) + "\n")
             for i, b in enumerate(big, 1):
                 _print_blob(f"S{i}", b)
         return 0
 
     if r.embedded:
-        print(_box(f"🐍 SSR-embedded · {len(r.embedded)} blob(s)", [dim(args.url)], col=magenta) + "\n")
+        print(_box(f"🐍 SSR-embedded · {len(r.embedded)} blob(s)", [bold(args.url)], col=magenta) + "\n")
         for i, b in enumerate(r.embedded, 1):
             _print_blob(i, b)
         return 0
