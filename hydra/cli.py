@@ -56,6 +56,27 @@ def _endpoint_name(url: str) -> str:
     return url.split("?")[0].rstrip("/").split("/")[-1] or url
 
 
+def _cap(o, maxstr: int = 160, maxitems: int = 3, depth: int = 0):
+    """Bound a sample so output stays small — it's a *preview*, not the payload.
+    Truncate long strings, cap list/dict width and depth."""
+    if isinstance(o, str):
+        return o if len(o) <= maxstr else o[:maxstr] + "…"
+    if depth >= 4:
+        return "…"
+    if isinstance(o, list):
+        out = [_cap(x, maxstr, maxitems, depth + 1) for x in o[:maxitems]]
+        if len(o) > maxitems:
+            out.append(f"…+{len(o) - maxitems} more")
+        return out
+    if isinstance(o, dict):
+        items = list(o.items())
+        out = {k: _cap(v, maxstr, maxitems, depth + 1) for k, v in items[:maxitems * 3]}
+        if len(items) > maxitems * 3:
+            out["…"] = f"+{len(items) - maxitems * 3} more keys"
+        return out
+    return o
+
+
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--proxy", choices=("native", "file", "explicit"), default="native",
                    help="native = your ISP IP (default); file = random from proxies.txt; "
@@ -136,13 +157,13 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         out = []
         for c in r.candidates:
             d = {"method": c.method, "url": c.url, "status": c.status, "size": c.size,
-                 "shape": c.shape, "auth": _auth(c), "sample": c.sample}
+                 "shape": c.shape, "auth": _auth(c), "sample": _cap(c.sample)}
             if c.post_data:
-                d["post_data"] = c.post_data
+                d["post_data"] = c.post_data[:300]
             out.append(d)
         for b in r.embedded:
             out.append({"kind": b.kind, "records": b.records_count, "size": b.size,
-                        "path": b.records_path, "sample": b.sample})
+                        "path": b.records_path, "sample": _cap(b.sample)})
         print(json.dumps(out, default=str, indent=2))
         return 0 if out else 1
 
