@@ -106,6 +106,10 @@ A proxy file is one `ip:port:user:pass` (or `ip:port`) per line; `--proxies-file
 defaults to `./proxies.txt` (or `$PROXIES_FILE`). Geoip is auto-aligned to the
 proxy's exit IP so timezone/locale match where the traffic appears to come from.
 
+If you **ask** for a proxy (`--proxies-file` / `--proxy-str` / `--proxy file`) but
+none loads, Hydra **aborts** rather than falling back to your native IP — so a
+missing proxy file can't accidentally hit a geo-locked site from your real IP.
+
 > Proxy files hold credentials — keep them out of the repo. The default
 > `proxies.txt` / `proxies*.txt` are gitignored; a custom name is **not**, so add
 > it to `.gitignore` if you name it something else.
