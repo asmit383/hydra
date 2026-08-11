@@ -17,6 +17,22 @@ from hydra.discover import capture
 from hydra.session import pick_proxy
 from hydra.stealth import resilient_capture
 
+# --- terminal colors (auto-off when piped / NO_COLOR) --------------------------
+_COLOR = sys.stdout.isatty() and os.getenv("NO_COLOR") is None
+
+
+def _c(code: str, s: str) -> str:
+    return f"\033[{code}m{s}\033[0m" if _COLOR else s
+
+
+def bold(s):   return _c("1", s)
+def dim(s):    return _c("2", s)
+def red(s):    return _c("31", s)
+def green(s):  return _c("32", s)
+def yellow(s): return _c("33", s)
+def cyan(s):   return _c("36", s)
+def magenta(s): return _c("35", s)
+
 
 def _add_proxy_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--proxy", choices=("native", "file", "explicit"), default="native",
@@ -47,18 +63,19 @@ def _cmd_capture(args: argparse.Namespace) -> int:
 
     attempts = 1 if args.no_heal else args.attempts
     if not args.json:
-        heal = "no-heal" if args.no_heal else f"self-healing, up to {attempts} attempts"
-        print(f"→ capturing {args.url}  ({heal}) ...\n")
+        heal = "no-heal" if args.no_heal else f"self-healing · up to {attempts} attempts"
+        print(f"{cyan('🐍 hydra')} {bold('capture')} {args.url}  {dim('(' + heal + ')')}\n")
 
     def on_attempt(att):
         # stay quiet on a clean first hit; narrate only when actually healing
+        via = dim(att.via)
         if att.verdict.blocked:
-            print(f"  ✗ attempt {att.n} via {att.via}: {att.verdict.kind} "
-                  f"(layer: {att.verdict.layer}) → {att.move}")
-        elif not att.verdict.blocked and "rotate exit" in att.move:
-            print(f"  ~ attempt {att.n} via {att.via}: {att.move}")
+            print(f"  {red('✗')} {dim(f'attempt {att.n}')} {via}  "
+                  f"{red(att.verdict.kind)} {dim('· layer ' + att.verdict.layer)} {dim('→')} {yellow(att.move)}")
+        elif "rotate exit" in att.move:
+            print(f"  {yellow('~')} {dim(f'attempt {att.n}')} {via}  {yellow(att.move)}")
         elif att.n > 1:
-            print(f"  ✓ attempt {att.n} via {att.via}: through")
+            print(f"  {green('✓')} {dim(f'attempt {att.n}')} {via}  {green('through')}")
 
     r = resilient_capture(args.url, max_attempts=attempts, headless=not args.headful,
                           interact=not args.no_interact, scroll_steps=args.scrolls,
@@ -74,51 +91,52 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     if not r.recovered:
         want = f"'{args.expect}'" if args.expect else f"{args.min_endpoints}+ endpoints"
         if (args.expect or args.min_endpoints > 1) and (r.candidates or r.embedded):
-            print(f"\n⚠ never reached {want} after {r.tries} exit(s) — showing what did fire "
-                  f"(raise --attempts, or pin an in-country --proxy explicit):\n")
+            print(f"\n{yellow('⚠')} never reached {yellow(want)} after {r.tries} exit(s) — showing what "
+                  f"did fire {dim('(raise --attempts, or pin an in-country --proxy-str)')}\n")
         else:
-            print(f"\nblocked after {r.tries} attempt(s) — last: "
-                  f"{r.attempts[-1].verdict.kind}. Try --proxy file, or raise --attempts.")
+            print(f"\n{red('✗ blocked')} after {r.tries} attempt(s) {dim('· last: ' + r.attempts[-1].verdict.kind)}. "
+                  f"{dim('Try --proxies-file, or raise --attempts.')}")
             return 1
 
     if r.recovered and r.tries > 1:
-        print(f"  recovered in {r.tries} attempts.\n")
+        print(f"  {green('✓ recovered')} in {r.tries} attempts\n")
 
     if r.candidates:
-        print(f"found {len(r.candidates)} candidate endpoint(s), biggest first:\n")
+        print(f"{green('▸')} found {bold(green(str(len(r.candidates))))} endpoint(s) "
+              f"{dim('· biggest first')}\n")
         for i, c in enumerate(r.candidates, 1):
-            print(f"[{i}] {c.method} {c.url}")
-            print(f"    status {c.status} · {c.size:,} bytes · {c.shape}")
+            print(f"{green(f'[{i}]')} {bold(c.method)} {cyan(c.url)}")
+            print(f"    {dim(f'{c.status} · {c.size:,} B · {c.shape}')}")
             auth = [k for k in c.request_headers
                     if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]
             if auth:
-                print(f"    auth headers present: {auth}")
-            print(f"    sample: {json.dumps(c.sample, default=str)[:160]}")
+                print(f"    {yellow('🔑 auth: ' + ', '.join(auth))}")
+            print(f"    {dim('sample:')} {dim(json.dumps(c.sample, default=str)[:160])}")
             print()
         # some sites SSR the main list even while an API serves side content —
         # surface a substantial inlined blob alongside the API candidates.
         big = [b for b in r.embedded if b.records_count >= 5]
         if big:
-            print("also inlined in the HTML (SSR — often the main list):\n")
+            print(f"{magenta('▸')} also inlined in the HTML {dim('(SSR — often the main list)')}\n")
             for i, b in enumerate(big, 1):
-                print(f"[S{i}] {b.kind} · {b.size:,} bytes · "
-                      f"{b.records_count} records at {b.records_path}")
-                print(f"     sample: {json.dumps(b.sample, default=str)[:140]}")
+                print(f"{magenta(f'[S{i}]')} {bold(b.kind)} "
+                      f"{dim(f'· {b.size:,} B · {b.records_count} records at {b.records_path}')}")
+                print(f"     {dim('sample:')} {dim(json.dumps(b.sample, default=str)[:140])}")
                 print()
         return 0
 
     if r.embedded:
-        print("no XHR API — data is SSR-embedded in the HTML. Inlined blob(s), "
-              "biggest record set first:\n")
+        print(f"{magenta('▸')} no XHR API — data is {bold('SSR-embedded')} in the HTML "
+              f"{dim('· biggest record set first')}\n")
         for i, b in enumerate(r.embedded, 1):
-            print(f"[{i}] {b.kind} · {b.size:,} bytes")
-            print(f"    {b.records_count} records at  {b.records_path}")
-            print(f"    sample: {json.dumps(b.sample, default=str)[:160]}")
+            print(f"{magenta(f'[{i}]')} {bold(b.kind)} {dim(f'· {b.size:,} B')}")
+            print(f"    {dim(f'{b.records_count} records at {b.records_path}')}")
+            print(f"    {dim('sample:')} {dim(json.dumps(b.sample, default=str)[:160])}")
             print()
         return 0
 
-    print("no internal JSON API found and no inlined data blob — the API may fire "
-          "on interaction (scroll/click), or the page is behind a block.")
+    print(f"{yellow('∅')} no internal JSON API and no inlined blob — the API may fire "
+          f"{dim('on interaction (scroll/click), or the page is behind a block.')}")
     return 1
 
 
