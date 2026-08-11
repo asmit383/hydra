@@ -37,11 +37,18 @@ python -m camoufox fetch    # one-time browser download
 
 ## Quick start
 ```bash
-hydra capture https://example.com
+hydra capture https://example.com            # JSON of the discovered endpoints → stdout
+hydra capture https://example.com > api.json # progress goes to stderr, so this stays clean JSON
+hydra capture https://example.com --pretty   # colored, boxed human view instead
 ```
+Output is **JSON by default** — a clean array of the discovered endpoints
+(`method`, `url`, `status`, `size`, `shape`, `auth`, `sample`) — so you can pipe
+it to `jq`, save it, or feed a replay. `--pretty` gives a colored boxed view.
+
 `capture` **self-heals by default** — it starts on your own IP, and only if it
 diagnoses a block does it escalate (wait the challenge out → fresh fingerprint →
-rotate to a proxy). It stays quiet when nothing's wrong, and narrates when it fights.
+rotate to a proxy). It stays quiet when nothing's wrong, and narrates (on stderr)
+when it fights.
 
 ## What it finds
 
@@ -57,10 +64,15 @@ A site can ship its data four ways. Hydra covers all four:
 Example — an infinite-scroll site, where the data only loads as you scroll:
 ```
 $ hydra capture https://quotes.toscrape.com/scroll
-found 6 candidate endpoint(s), biggest first:
-[1] GET https://quotes.toscrape.com/api/quotes?page=2  ·  dict(5 keys)
-    sample: {"has_next": true, "page": 2, "quotes": [{"author": {...}, "text": "..."}]}
-...
+[
+  {
+    "method": "GET",
+    "url": "https://quotes.toscrape.com/api/quotes?page=2",
+    "status": 200, "size": 4793, "shape": "dict(5 keys)", "auth": [],
+    "sample": { "has_next": true, "page": 2, "quotes": [ ... ] }
+  },
+  ...
+]
 ```
 Trackers, analytics, fonts, consent/CMP config, and payment SDKs are filtered out
 automatically. Each API candidate is captured **with its request + auth headers**,
@@ -148,7 +160,8 @@ The session file holds cookies + tokens — it's a **credential**. Hydra writes 
 | `--attempts N` / `--no-heal` | max self-heal attempts / single-shot |
 | `--no-interact` / `--scrolls N` | skip or tune the scroll pass |
 | `--state PATH` | capture with a saved login session (`hydra login`) |
-| `--json` / `--headful` | JSON output / show the browser window |
+| `--pretty` | colored boxed view instead of the default JSON |
+| `--headful` | show the browser window |
 
 ## Status
 🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
