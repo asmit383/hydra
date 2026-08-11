@@ -34,12 +34,13 @@ def _cmd_capture(args: argparse.Namespace) -> int:
     #   native   → native only, no proxy escalation
     #   file     → start on a proxies.txt exit
     #   explicit → use --proxy-str
-    mode = args.proxy
-    if mode == "explicit":
+    # infer the mode from what you actually pass: giving a proxies file or an
+    # explicit proxy already means "use a proxy" — no need to also say --proxy file.
+    if args.proxy_str:
         heal_kw = dict(start="proxy", explicit=args.proxy_str)
-    elif mode == "file":
+    elif args.proxies_file or args.proxy == "file":
         heal_kw = dict(start="proxy", proxies_file=args.proxies_file)
-    elif mode == "native":
+    elif args.proxy == "native":
         heal_kw = dict(start="native", proxies_file=None)
     else:  # auto
         heal_kw = dict(start="native", proxies_file=args.proxies_file)
@@ -195,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "explicit = --proxy-str")
     cap.add_argument("--proxy-str", metavar="ip:port:user:pass", help="proxy for --proxy explicit")
     cap.add_argument("--proxies-file", metavar="PATH",
-                     help="proxies.txt for escalation (or set PROXIES_FILE)")
+                     help="path to a proxies file (implies file mode — no --proxy needed)")
     cap.add_argument("--attempts", type=int, default=3, help="max self-heal attempts")
     cap.add_argument("--no-heal", action="store_true",
                      help="single shot — don't heal through a block")
