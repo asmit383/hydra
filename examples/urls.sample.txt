@@ -1,0 +1,7 @@
+# starter battle-test list — public, safe targets across the discovery modes.
+# add your own; run:  python examples/battle_test.py examples/urls.sample.txt
+https://quotes.toscrape.com/scroll          # infinite-scroll XHR API
+https://quotes.toscrape.com/                 # plain SSR (data in HTML)
+https://example.com/                         # static marketing page (should be empty)
+https://books.toscrape.com/                  # SSR listing
+https://news.ycombinator.com/                # SSR, server-rendered

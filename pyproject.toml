@@ -16,6 +16,9 @@ dependencies = [
     "httpx",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.urls]
 Homepage = "https://github.com/asmit383/hydra"
 Repository = "https://github.com/asmit383/hydra"
