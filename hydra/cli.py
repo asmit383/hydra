@@ -173,6 +173,10 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         for j, b in enumerate(r.embedded, len(r.candidates) + 1):
             out.append({"n": j, "kind": b.kind, "records": b.records_count,
                         "size": b.size, "path": b.records_path, "sample": _preview(b.sample)})
+        for k, s in enumerate(r.streams, len(r.candidates) + len(r.embedded) + 1):
+            out.append({"n": k, "kind": s.kind, "url": s.url, "frames": s.n_received,
+                        "subscribe": [m[:256] for m in s.sent[:3]],
+                        "sample": (s.received[0][:256] if s.received else None)})
         print(_color_json(json.dumps(out, default=str, indent=2)))
         return 0 if out else 1
 
@@ -201,10 +205,27 @@ def _cmd_capture(args: argparse.Namespace) -> int:
               f"{bold(yellow(f'{b.records_count} records'))} · {b.size:,} B · {b.records_path}")
         print(f"    {json.dumps(b.sample, default=str)[:120]}\n")
 
+    def _print_stream(tag, s):
+        print(f"{bold(blue(f'[{tag}]'))} {bold(s.kind.upper())} {bold(cyan(s.url))}   "
+              f"{bold(yellow(f'{s.n_received} frames'))}")
+        if s.sent:
+            print(f"    ↑ subscribe: {s.sent[0][:120]}")
+        if s.received:
+            print(f"    ↓ sample:    {s.received[0][:120]}")
+        print()
+
+    def _print_streams():
+        if r.streams:
+            print(bold(blue("── live streams (WebSocket / SSE) ──")) + "\n")
+            for i, s in enumerate(r.streams, 1):
+                _print_stream(f"W{i}", s)
+
     if r.candidates:
         head = f"{len(r.candidates)} endpoint" + ("s" if len(r.candidates) != 1 else "")
         if big:
             head += f" + {len(big)} SSR blob" + ("s" if len(big) != 1 else "")
+        if r.streams:
+            head += f" + {len(r.streams)} stream" + ("s" if len(r.streams) != 1 else "")
         if r.recovered and r.tries > 1:
             head += f"  ·  recovered in {r.tries}"
         print(_box(f"🐍 {head}", [bold(args.url)], col=green) + "\n")
@@ -214,16 +235,23 @@ def _cmd_capture(args: argparse.Namespace) -> int:
             print(bold(magenta("── also inlined in the HTML (SSR) ──")) + "\n")
             for i, b in enumerate(big, 1):
                 _print_blob(f"S{i}", b)
+        _print_streams()
         return 0
 
-    if r.embedded:
-        print(_box(f"🐍 SSR-embedded · {len(r.embedded)} blob(s)", [bold(args.url)], col=magenta) + "\n")
+    if r.embedded or r.streams:
+        parts = []
+        if r.embedded:
+            parts.append(f"{len(r.embedded)} SSR blob(s)")
+        if r.streams:
+            parts.append(f"{len(r.streams)} stream(s)")
+        print(_box(f"🐍 {' · '.join(parts)}", [bold(args.url)], col=magenta) + "\n")
         for i, b in enumerate(r.embedded, 1):
             _print_blob(i, b)
+        _print_streams()
         return 0
 
     print(f"{yellow('∅')} no internal JSON API and no inlined blob — the API may fire "
-          f"{dim('on interaction (scroll/click), or the page is behind a block.')}")
+          f"on interaction (scroll/click), or the page is behind a block.")
     return 1
 
 

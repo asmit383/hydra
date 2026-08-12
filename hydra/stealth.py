@@ -71,6 +71,10 @@ class HealResult:
     def embedded(self):
         return self.result.embedded if self.result else []
 
+    @property
+    def streams(self):
+        return self.result.streams if self.result else []
+
 
 def resilient_capture(url: str, *, proxies_file: str | None = None,
                       explicit: str | dict | None = None, start: str = "native",
@@ -93,10 +97,15 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         you already know the endpoint you're after).
     """
     def _met(result) -> bool:
-        if len(result.candidates) < min_candidates:
+        # count *all* data found — XHR candidates, SSR blobs, and live streams —
+        # so a WebSocket-only or SSR-only page isn't mistaken for an empty one.
+        found = len(result.candidates) + len(result.embedded) + len(result.streams)
+        if found < min_candidates:
             return False
-        if expect and not any(expect.lower() in c.url.lower() for c in result.candidates):
-            return False
+        if expect:
+            urls = [c.url for c in result.candidates] + [s.url for s in result.streams]
+            if not any(expect.lower() in u.lower() for u in urls):
+                return False
         return True
 
     pool = [parse_proxy(explicit)] if explicit else load_proxies(proxies_file)

@@ -58,6 +58,16 @@ class ApiCandidate:
 
 
 @dataclass
+class StreamCandidate:
+    """A live stream — WebSocket or SSE — carrying pushed data (live odds, tickers)."""
+    kind: str                 # "websocket" | "sse"
+    url: str
+    sent: list                # WS frames the client sent (subscribe/handshake) — for replay
+    received: list            # a small sample of frames/events received (the data)
+    n_received: int           # total frames/events seen in the capture window
+
+
+@dataclass
 class CaptureResult:
     """Everything one navigation told us — the data *and* the block evidence."""
     candidates: list[ApiCandidate]
@@ -66,6 +76,7 @@ class CaptureResult:
     title: str                # page <title> (challenge pages have telltale titles)
     block_signals: list[str]  # e.g. ["host:captcha-delivery.com", "status:403"]
     embedded: list[EmbeddedBlob] = field(default_factory=list)  # SSR-inlined data (v0.1.1)
+    streams: list[StreamCandidate] = field(default_factory=list)  # WS/SSE (v0.2.x)
 
 
 def _is_noise(url: str) -> bool:
@@ -138,6 +149,30 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     candidates: list[ApiCandidate] = []
     seen: set[str] = set()
     challenge_hosts: set[str] = set()
+    streams: list[StreamCandidate] = []
+    seen_stream: set[str] = set()
+
+    def on_ws(ws):
+        # a WebSocket opened — capture its URL, the client's subscribe frames
+        # (needed to replay it), and a sample of the data frames it receives.
+        u = ws.url
+        if _is_noise(u) or u in seen_stream:
+            return
+        seen_stream.add(u)
+        sc = StreamCandidate("websocket", u, [], [], 0)
+        streams.append(sc)
+
+        def _sent(payload):
+            if isinstance(payload, str) and len(sc.sent) < 5:
+                sc.sent.append(payload[:400])
+
+        def _recv(payload):
+            sc.n_received += 1
+            if isinstance(payload, str) and len(sc.received) < 3:
+                sc.received.append(payload[:400])
+
+        ws.on("framesent", _sent)
+        ws.on("framereceived", _recv)
 
     def on_response(response):
         # This IS "the handler": Camoufox calls it for EVERY response automatically.
@@ -151,6 +186,12 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                 challenge_hosts.add(b)
                 is_block = True
         if is_block or u in seen or _is_noise(u):
+            return
+        # SSE stream? record the endpoint (can't read a streaming body) and move on.
+        if "text/event-stream" in (response.headers or {}).get("content-type", "").lower():
+            if u not in seen_stream:
+                seen_stream.add(u)
+                streams.append(StreamCandidate("sse", u, [], [], 0))
             return
         # DON'T gate on content-type — legacy backends serve JSON as text/plain or
         # even text/html (e.g. Java/PHP betting & enterprise platforms). Skip only
@@ -186,6 +227,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     html = ""
     with launch(proxy=proxy, headless=headless, storage_state=storage_state) as page:
         page.on("response", on_response)          # register BEFORE navigating!
+        page.on("websocket", on_ws)               # capture live streams too
         try:
             resp = page.goto(url, wait_until="networkidle", timeout=45000)
             nav_status = resp.status if resp else None
@@ -239,7 +281,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         if nav_status in (403, 429, 503):
             block.append(f"status:{nav_status}")
 
-    return CaptureResult(candidates, nav_status, final_url, title, block, embedded)
+    return CaptureResult(candidates, nav_status, final_url, title, block, embedded, streams)
 
 
 def discover(url: str, proxy: dict | None = None, wait_ms: int = 3500,
