@@ -30,19 +30,20 @@
 
 ---
 
+## Shipped since ✅
+
+### WebSocket / SSE capture
+Live/streaming data (live odds, tickers) is pushed over **WebSocket** / SSE.
+`page.on("websocket")` now captures each stream: URL, the client's **subscribe
+frames** (for replay), and a sample of received data frames; `text/event-stream`
+responses are recorded as SSE endpoints. Surfaced in JSON + pretty output.
+- Still open: **WS replay** — reconnect + re-subscribe + merge delta frames into
+  current state is site-specific and much harder than REST; `hydra gen` doesn't
+  emit WS clients yet (capture shows the subscribe frames to build one by hand).
+
 ## NOT covered yet ⬜  (honest gaps — real mechanisms, not edge cases)
 
-### 1. WebSocket / SSE  ← the biggest gap
-Live/streaming data (live betting odds, live scores, trading tickers, chat) is
-pushed over **WebSocket** or **Server-Sent Events**, not XHR. Hydra intercepts
-neither, so it's blind to anything real-time. Prematch/static data = caught; live
-data = missed.
-- Approach: `page.on("websocket")` → capture the connection URL, subprotocol, and
-  a sample of frames (sent + received); surface it as a streaming "endpoint".
-  Same idea for SSE (`text/event-stream` responses — currently they'd fail JSON
-  parse and be dropped).
-
-### 2. Typed-search interaction
+### 1. Typed-search interaction
 APIs that fire only on **keystrokes** — Algolia, autocomplete, search-as-you-type
 (the YC/DocSearch case). The scroll pass doesn't trigger them.
 - Approach: `--type "<query>"` — focus a search input, type, wait, intercept.

@@ -60,6 +60,7 @@ A site can ship its data four ways. Hydra covers all four:
 | **API on interaction** (infinite scroll, pagination) | a scroll pass triggers it, then intercepts |
 | **SSR** — inlined in the HTML (`__NEXT_DATA__`, Apollo, `ld+json`) | extracts the blob, points at the biggest record set |
 | **Next.js App Router** — React Server Component streams (`__next_f`) | reassembles the stream and harvests the records |
+| **live streams** — WebSocket / SSE (live odds, tickers) | captures the URL, subscribe frames, and a data sample |
 
 Example — an infinite-scroll site, where the data only loads as you scroll:
 ```
@@ -176,10 +177,10 @@ The session file holds cookies + tokens — it's a **credential**. Hydra writes 
 
 ## Status
 🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
-content-type), self-healing through blocks, proxies with geo-gated retry,
-authenticated capture, and **`hydra gen`** (browser-free client codegen). Not yet
-covered: **WebSocket/SSE** (live/streaming data), typed-search, and click-gated
-data — see `phases.md`.
+content-type, **plus WebSocket/SSE live streams**), self-healing through blocks,
+proxies with geo-gated retry, authenticated capture, and **`hydra gen`**
+(browser-free client codegen). Not yet covered: **WS replay** (capture works,
+codegen doesn't), typed-search, and click-gated data — see `phases.md`.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
 spoofing. Hydra is the *adaptive* layer above it.
