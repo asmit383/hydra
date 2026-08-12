@@ -14,3 +14,4 @@ runcrate.json
 *session*.json
 *.session.json
 *.state.json
+.github/workflows/tests.yml
