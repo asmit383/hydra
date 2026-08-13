@@ -26,12 +26,29 @@ _LDJSON_RE = re.compile(
 _JSON_SCRIPT_RE = re.compile(
     r'<script[^>]+type="application/json"[^>]*>(.*?)</script>', re.DOTALL | re.I)
 
-# keys that mark a record as real *content* (a product/post/listing) rather than
-# taxonomy/config — used to pick the item list out of a mixed RSC stream.
+# keys that mark a record as real *content* (a product/listing/post) rather than
+# taxonomy/config/root — used to pick the item list out of a mixed blob. Compared
+# lowercased, so camelCase (itemId, lowestAsk) matches.
 _CONTENT_KEYS = frozenset({
-    "price", "brand", "brand_title", "photo", "photos", "image", "thumbnail",
-    "currency", "size_title", "favourite_count", "author", "description", "content",
+    # commerce
+    "price", "pricing", "amount", "cost", "currency", "sku", "gtin", "upc",
+    "availability", "instock", "stock", "offers", "brand", "brand_title", "name",
+    "title", "productid", "itemid", "model", "rating", "lowestask", "highestbid",
+    "lastsale", "total_item_price",
+    # media / marketplace / social
+    "photo", "photos", "image", "thumbnail", "size_title", "favourite_count",
+    "author", "description", "content",
+    # betting
+    "odds", "market", "coefficient", "cf", "cfview",
 })
+
+
+def _content_score(sample) -> int:
+    """How many content keys a record has — the signal that it's a real item, not
+    config. More content keys → more likely the data you want."""
+    if not isinstance(sample, dict):
+        return 0
+    return len({k.lower() for k in sample} & _CONTENT_KEYS)
 
 
 @dataclass
@@ -43,30 +60,36 @@ class EmbeddedBlob:
     sample: object       # one record, to confirm it's the data
 
 
-def _biggest_records(obj, path: str = "$", depth: int = 0) -> tuple[str, int, object]:
-    """Walk nested JSON, return (path, count, sample) of the largest collection of
-    record-like dicts. Handles both plain arrays and Apollo-style normalized caches
-    (a dict whose *values* are the records). Bounded so huge blobs stay cheap."""
-    best = (path, 0, None)
+def _biggest_records(obj, path: str = "$", depth: int = 0):
+    """Walk nested JSON, return (rank, path, count, sample) of the best collection of
+    record-like dicts. Ranked by (content-key richness, count) — so a *content-rich*
+    list (products with price/name) beats a merely *bigger* one (config/taxonomy/
+    reviews). Handles plain arrays and Apollo-style normalized caches. Bounded."""
+    best = ((0, 0), path, 0, None)   # (rank, path, count, sample)
     if depth > 6:
         return best
 
+    def consider(p, coll):
+        nonlocal best
+        if coll:
+            rank = (_content_score(coll[0]), len(coll))
+            if rank > best[0]:
+                best = (rank, p, len(coll), coll[0])
+
     if isinstance(obj, list):
-        dicts = [x for x in obj if isinstance(x, dict)]
-        if len(dicts) > best[1]:
-            best = (path, len(dicts), dicts[0] if dicts else None)
+        consider(path, [x for x in obj if isinstance(x, dict)])
         for i, x in enumerate(obj[:50]):
             cand = _biggest_records(x, f"{path}[{i}]", depth + 1)
-            if cand[1] > best[1]:
+            if cand[0] > best[0]:
                 best = cand
     elif isinstance(obj, dict):
-        # normalized cache: {"Type:id": {...record...}, ...} — count the record values
+        # normalized cache: {"Type:id": {...record...}, ...} — the record values
         vals = [v for v in obj.values() if isinstance(v, dict) and len(v) >= 2]
-        if len(vals) >= 3 and len(vals) > best[1]:
-            best = (path, len(vals), vals[0])
+        if len(vals) >= 3:
+            consider(path, vals)
         for k, v in list(obj.items())[:100]:
             cand = _biggest_records(v, f"{path}.{k}", depth + 1)
-            if cand[1] > best[1]:
+            if cand[0] > best[0]:
                 best = cand
     return best
 
@@ -171,8 +194,7 @@ def _rsc_blob(html: str) -> EmbeddedBlob | None:
     def score(group):
         # richer content signal wins over mere size: a category tree may outnumber
         # the items but carries far fewer content keys (1 vs 4+).
-        n_content = len(set(group[0].keys()) & _CONTENT_KEYS)
-        return (n_content, len(group))
+        return (_content_score(group[0]), len(group))
 
     main = max(groups.values(), key=score)
     if len(main) < 5:
@@ -188,7 +210,7 @@ def _blob(kind: str, raw: str) -> EmbeddedBlob | None:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
-    path, count, sample = _biggest_records(data)
+    _, path, count, sample = _biggest_records(data)
     return EmbeddedBlob(kind=kind, size=len(raw), records_path=path,
                         records_count=count, sample=sample)
 

@@ -39,6 +39,20 @@ def test_extract_json_at_is_string_aware():
     assert json.loads(frag) == {"name": "a}b", "id": 1}
 
 
+def test_next_data_prefers_product_over_bigger_config():
+    # the StockX/Home Depot bug: a big config array must NOT beat the smaller
+    # content-rich product list. Content-key scoring should pick the product.
+    data = {"props": {"pageProps": {
+        "appConfig": {f"S{i}": {"DOMAIN": "x", "CLIENTID": "y"} for i in range(30)},
+        "offers": [{"sku": f"s{i}", "price": 280 + i, "availability": "InStock"}
+                   for i in range(6)],
+    }}}
+    html = f'<script id="__NEXT_DATA__" type="application/json">{json.dumps(data)}</script>'
+    b = extract_embedded(html)[0]
+    assert "price" in b.sample                       # product, not config
+    assert b.records_count == 6
+
+
 def test_ldjson_extraction():
     html = ('<script type="application/ld+json">'
             '{"mainEntity":[{"@type":"Q","name":"one"},{"@type":"Q","name":"two"}]}'
