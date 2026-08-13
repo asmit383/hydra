@@ -26,29 +26,30 @@ _LDJSON_RE = re.compile(
 _JSON_SCRIPT_RE = re.compile(
     r'<script[^>]+type="application/json"[^>]*>(.*?)</script>', re.DOTALL | re.I)
 
-# keys that mark a record as real *content* (a product/listing/post) rather than
-# taxonomy/config/root — used to pick the item list out of a mixed blob. Compared
-# lowercased, so camelCase (itemId, lowestAsk) matches.
-_CONTENT_KEYS = frozenset({
-    # commerce
-    "price", "pricing", "amount", "cost", "currency", "sku", "gtin", "upc",
-    "availability", "instock", "stock", "offers", "brand", "brand_title", "name",
-    "title", "productid", "itemid", "model", "rating", "lowestask", "highestbid",
-    "lastsale", "total_item_price",
-    # media / marketplace / social
+# Two tiers, compared lowercased (so itemId/lowestAsk match). MONEY keys are the
+# strong "this is the product/offer" signal; WEAK keys (name/author/rating…) also
+# appear on reviews/blog cards, so they count for far less. A price-bearing record
+# must beat a bigger reviews list — the Home Depot / StockX case.
+_MONEY_KEYS = frozenset({
+    "price", "pricing", "offers", "offer", "amount", "cost", "currency", "sku",
+    "gtin", "upc", "availability", "instock", "stock", "lowestask", "highestbid",
+    "lastsale", "total_item_price", "odds", "coefficient",
+})
+_WEAK_KEYS = frozenset({
+    "name", "title", "brand", "brand_title", "model", "productid", "itemid",
     "photo", "photos", "image", "thumbnail", "size_title", "favourite_count",
-    "author", "description", "content",
-    # betting
-    "odds", "market", "coefficient", "cf", "cfview",
+    "author", "description", "content", "rating", "market", "cf", "cfview",
 })
 
 
 def _content_score(sample) -> int:
-    """How many content keys a record has — the signal that it's a real item, not
-    config. More content keys → more likely the data you want."""
+    """Weighted content signal for a record. A **money** key (price/sku/offers…) is
+    worth 10× a generic one (name/author/rating…), so a single product-with-price
+    beats a numerous reviews list. Higher → more likely the data you want."""
     if not isinstance(sample, dict):
         return 0
-    return len({k.lower() for k in sample} & _CONTENT_KEYS)
+    keys = {k.lower() for k in sample}
+    return 10 * len(keys & _MONEY_KEYS) + len(keys & _WEAK_KEYS)
 
 
 @dataclass
@@ -243,5 +244,6 @@ def extract_embedded(html: str) -> list[EmbeddedBlob]:
             if b and b.records_count >= 1:
                 blobs.append(b)
 
-    blobs.sort(key=lambda b: b.records_count, reverse=True)
+    # a price-bearing blob outranks a bigger reviews/config one
+    blobs.sort(key=lambda b: (_content_score(b.sample), b.records_count), reverse=True)
     return blobs

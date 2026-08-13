@@ -53,6 +53,19 @@ def test_next_data_prefers_product_over_bigger_config():
     assert b.records_count == 6
 
 
+def test_price_record_beats_numerous_reviews():
+    # the Home Depot case: a single price-bearing product must outrank a bigger
+    # reviews list (reviews are content-ish but carry no money keys).
+    prod = {"@graph": [{"@type": "Product", "name": "Fan",
+                        "offers": {"price": 89, "availability": "InStock", "sku": "X"}}]}
+    revs = {"review": [{"author": "a", "rating": 5, "reviewBody": "ok", "description": "x"}
+                       for _ in range(10)]}
+    html = (f'<script type="application/ld+json">{json.dumps(prod)}</script>'
+            f'<script type="application/ld+json">{json.dumps(revs)}</script>')
+    top = extract_embedded(html)[0].sample
+    assert "offers" in top or "price" in json.dumps(top)   # product, not reviews
+
+
 def test_ldjson_extraction():
     html = ('<script type="application/ld+json">'
             '{"mainEntity":[{"@type":"Q","name":"one"},{"@type":"Q","name":"two"}]}'
