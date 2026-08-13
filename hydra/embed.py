@@ -73,9 +73,10 @@ def _biggest_records(obj, path: str = "$", depth: int = 0):
     def consider(p, coll):
         nonlocal best
         if coll:
-            rank = (_content_score(coll[0]), len(coll))
+            sample = max(coll, key=_content_score)   # the richest record, not the first
+            rank = (_content_score(sample), len(coll))
             if rank > best[0]:
-                best = (rank, p, len(coll), coll[0])
+                best = (rank, p, len(coll), sample)
 
     if isinstance(obj, list):
         consider(path, [x for x in obj if isinstance(x, dict)])
