@@ -1,0 +1,84 @@
+<!doctype html>
+<!--
+  Hydra — movement style demo. Dead simple: open this file in any browser.
+  Two panels animate side by side, each an independent cursor chasing a jumping
+  button:
+    LEFT  — CAMOUFOX style : one curved (humanized) move onto the target.
+    RIGHT — HYDRA style    : curved move + overshoot + micro-correction — the
+                             multi-phase approach a real hand makes.
+  This is a JS *visualization* of the two styles (not the live Camoufox mouse) —
+  for showing the difference at a glance. Live stats under each panel.
+-->
+<html><head><meta charset="utf-8"><title>Hydra — movement demo</title><style>
+ *{box-sizing:border-box} body{margin:0;background:#080810;color:#cdd;font-family:ui-monospace,monospace;overflow:hidden}
+ header{padding:12px 20px;border-bottom:1px solid #1c1c2a}
+ header h1{margin:0;font-size:17px;color:#fff} header p{margin:3px 0 0;font-size:12px;color:#68708a}
+ .panels{display:flex;height:calc(100vh - 56px)}
+ .panel{flex:1;position:relative;border-right:1px solid #1c1c2a}.panel:last-child{border-right:0}
+ canvas{position:absolute;inset:0}
+ .tag{position:absolute;top:14px;left:16px;font-size:15px;font-weight:700;z-index:3}
+ .stat{position:absolute;bottom:14px;left:16px;font-size:13px;line-height:1.8;z-index:3;color:#8a92ab}
+ .stat b{color:#e6e9f2}
+ .btn{position:absolute;padding:11px 16px;font:700 13px ui-monospace,monospace;color:#080810;border-radius:9px;z-index:2}
+</style></head><body>
+<header><h1>🐍 Hydra — behavioral movement: Camoufox vs Hydra</h1>
+<p>left: one curved move · right: curved move + overshoot &amp; micro-correction (the human approach on top)</p></header>
+<div class="panels">
+ <div class="panel" id="L"><canvas></canvas><div class="tag" style="color:#3ee6ff">CAMOUFOX · direct move</div>
+   <div class="btn" style="background:#3ee6ff">TARGET</div><div class="stat"></div></div>
+ <div class="panel" id="R"><canvas></canvas><div class="tag" style="color:#ffb020">HYDRA · approach + correction</div>
+   <div class="btn" style="background:#ffb020">TARGET</div><div class="stat"></div></div>
+</div>
+<script>
+const rnd=(a,b)=>a+Math.random()*(b-a);
+function bezier(p0,p1,p2,t){const u=1-t; return [u*u*p0[0]+2*u*t*p1[0]+t*t*p2[0], u*u*p0[1]+2*u*t*p1[1]+t*t*p2[1]];}
+function ctrl(a,b){ // a curved control point: midpoint pushed perpendicular
+ const mx=(a[0]+b[0])/2,my=(a[1]+b[1])/2, dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy)||1;
+ const off=rnd(-0.35,0.35)*len; return [mx - dy/len*off, my + dx/len*off];}
+
+function panel(id,color,style){
+ const p=document.getElementById(id),cv=p.querySelector('canvas'),ctx=cv.getContext('2d'),
+       btn=p.querySelector('.btn'),st=p.querySelector('.stat');
+ const size=()=>{cv.width=p.clientWidth;cv.height=p.clientHeight;}; size(); addEventListener('resize',size);
+ let cur=[p.clientWidth/2,p.clientHeight/2], last=cur.slice(), moves=0, angSum=0, prevDir=null;
+ const target=()=>[rnd(40,cv.width-120), rnd(70,cv.height-90)];
+ let goal=target(); place();
+ function place(){ btn.style.left=goal[0]+'px'; btn.style.top=goal[1]+'px'; }
+ // build the waypoint list for the current approach
+ function legs(){ const t=goal;
+   if(style==='camoufox') return [t];
+   const over=[t[0]+rnd(-60,60), t[1]+rnd(-45,45)];   // overshoot
+   return [over, t];                                   // then settle
+ }
+ let wp=legs(), seg=0, from=cur.slice(), c=ctrl(from,wp[0]), tt=0, speed=rnd(0.012,0.02);
+ function nextLeg(){ seg++;
+   if(seg>=wp.length){ // arrived -> "click": jump target, re-plan
+     goal=target(); place(); wp=legs(); seg=0; from=cur.slice(); c=ctrl(from,wp[0]); tt=0; speed=rnd(0.012,0.02);
+   } else { from=cur.slice(); c=ctrl(from,wp[seg]); tt=0; speed=rnd(0.012,0.02); }
+ }
+ function stats(){ const cvy=moves?angSum/moves:0;
+   const human=Math.round(Math.min(moves/6,40)+Math.min(cvy*60,30)+30); // sim: always variable timing
+   st.innerHTML='cursor samples <b>'+moves+'</b><br>path curviness <b>'+cvy.toFixed(3)
+     +'</b><br>style <b>'+(style==='camoufox'?'direct':'approach+correct')+'</b><br>human-ish <b>'+human+'/100</b>';}
+ function step(){
+   const to=wp[seg];
+   // ease in-out speed
+   const ease = 0.5 - 0.5*Math.cos(Math.min(tt,1)*Math.PI);
+   tt += speed;
+   const pt = bezier(from, c, to, Math.min(tt,1));
+   // draw
+   if(last){ ctx.strokeStyle=color; ctx.lineWidth=2.3; ctx.lineCap='round';
+     ctx.beginPath(); ctx.moveTo(last[0],last[1]); ctx.lineTo(pt[0],pt[1]); ctx.stroke(); }
+   ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(pt[0],pt[1],2.4,0,7); ctx.fill();
+   // curviness accounting
+   const dir=Math.atan2(pt[1]-last[1], pt[0]-last[0]);
+   if(prevDir!==null){ let d=Math.abs(dir-prevDir); if(d>Math.PI)d=2*Math.PI-d; angSum+=d; }
+   prevDir=dir; last=cur=pt; moves++; stats();
+   if(tt>=1) nextLeg();
+   requestAnimationFrame(step);
+ }
+ stats(); requestAnimationFrame(step);
+}
+panel('L','#3ee6ff','camoufox');
+panel('R','#ffb020','hydra');
+</script></body></html>
