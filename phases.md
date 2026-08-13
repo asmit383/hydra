@@ -48,6 +48,17 @@ APIs that fire only on **keystrokes** — Algolia, autocomplete, search-as-you-t
 (the YC/DocSearch case). The scroll pass doesn't trigger them.
 - Approach: `--type "<query>"` — focus a search input, type, wait, intercept.
 
+### 2. Behavioral-layer remediation (least-built of the three heal layers)
+`diagnose.py` *labels* a behavioral block (PerimeterX → "slow the cadence"), but the
+distinct remediation isn't built — a behavioral block currently falls into the same
+heal bucket as fingerprint (fresh fingerprint + relaunch + exponential backoff).
+What defends behavioral today is **baseline only**: Camoufox `humanize` (human-like
+cursor, always on) + the backoff slowing request cadence. The label is ahead of the
+mechanism — be honest about this.
+- Approach: on a diagnosed behavioral block, deliberately vary interaction timing —
+  jittered delays, more/longer human mouse + scroll before the key action, longer
+  dwell, non-metronomic cadence — as a distinct escalation, not the fingerprint path.
+
 ### 3. Click-gated data
 Data behind a **button/tab click** with no distinct URL — "load more", market
 tabs, expandable sections, "show odds". Scroll doesn't reach it.
