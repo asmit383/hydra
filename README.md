@@ -7,6 +7,13 @@ data (API or server-rendered) and self-heals when detection breaks.**
 
 *Cut off a head, two grow back.*
 
+<br>
+
+![Hydra humanized cursor movement](assets/movement.gif)
+
+<sub>Hydra's cursor — real Camoufox humanize, driven by a mostly-direct human approach:
+efficient by default, occasional overshoot, never a fixed pattern.</sub>
+
 </div>
 
 ---
