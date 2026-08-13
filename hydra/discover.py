@@ -11,6 +11,7 @@ stays the thin "just give me the candidates" entry point.
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass, field
 
 from hydra.embed import EmbeddedBlob, extract_embedded
@@ -134,10 +135,28 @@ def _autoscroll(page, steps: int, pause: int) -> None:
         page.wait_for_timeout(pause)
 
 
+def _behavioral_warmup(page) -> None:
+    """Human-presence signals to heal a *behavioral*-layer block (PerimeterX etc.):
+    jittered mouse movement (Camoufox humanize curves it into a human trajectory),
+    small back-and-forth scrolls, and variable dwell — so the session doesn't read
+    as an instant, mouse-less bot. The move timing is randomized (non-metronomic)."""
+    try:
+        for _ in range(random.randint(3, 6)):
+            page.mouse.move(random.randint(80, 1160), random.randint(80, 720))
+            page.wait_for_timeout(random.randint(180, 700))   # jittered, not fixed
+        page.mouse.wheel(0, random.randint(300, 900))
+        page.wait_for_timeout(random.randint(500, 1400))      # dwell / read time
+        page.mouse.wheel(0, -random.randint(100, 400))
+        page.wait_for_timeout(random.randint(400, 1100))
+    except Exception:
+        pass
+
+
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             headless: bool = True, challenge_wait_ms: int = 6000,
             interact: bool = True, scroll_steps: int = 6,
-            scroll_pause: int = 1200, storage_state: str | None = None) -> CaptureResult:
+            scroll_pause: int = 1200, storage_state: str | None = None,
+            humanize=True, warmup: bool = False) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
@@ -225,7 +244,8 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     final_url = url
     title = ""
     html = ""
-    with launch(proxy=proxy, headless=headless, storage_state=storage_state) as page:
+    with launch(proxy=proxy, headless=headless, storage_state=storage_state,
+                humanize=humanize) as page:
         page.on("response", on_response)          # register BEFORE navigating!
         page.on("websocket", on_ws)               # capture live streams too
         try:
@@ -251,6 +271,10 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                     pass
                 if not _challenge_title(title):
                     break                          # challenge cleared → through
+        # behavioral warmup: human presence signals (mouse/scroll/dwell) — used when
+        # healing a behavioral-layer block, before the data-triggering interaction.
+        if warmup and not _challenge_title(title):
+            _behavioral_warmup(page)
         # interaction pass: scroll to fire lazy / infinite-scroll / paginated XHR
         if interact and not _challenge_title(title):
             _autoscroll(page, scroll_steps, scroll_pause)

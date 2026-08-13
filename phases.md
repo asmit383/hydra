@@ -48,16 +48,16 @@ APIs that fire only on **keystrokes** — Algolia, autocomplete, search-as-you-t
 (the YC/DocSearch case). The scroll pass doesn't trigger them.
 - Approach: `--type "<query>"` — focus a search input, type, wait, intercept.
 
-### 2. Behavioral-layer remediation (least-built of the three heal layers)
-`diagnose.py` *labels* a behavioral block (PerimeterX → "slow the cadence"), but the
-distinct remediation isn't built — a behavioral block currently falls into the same
-heal bucket as fingerprint (fresh fingerprint + relaunch + exponential backoff).
-What defends behavioral today is **baseline only**: Camoufox `humanize` (human-like
-cursor, always on) + the backoff slowing request cadence. The label is ahead of the
-mechanism — be honest about this.
-- Approach: on a diagnosed behavioral block, deliberately vary interaction timing —
-  jittered delays, more/longer human mouse + scroll before the key action, longer
-  dwell, non-metronomic cadence — as a distinct escalation, not the fingerprint path.
+### 2. Behavioral-layer remediation — BUILT (mechanism), live-validation pending
+A diagnosed behavioral block (PerimeterX) now gets a **distinct** remediation, not
+the fingerprint bucket: on the SAME exit it runs a **warmup** (jittered mouse moves
+that Camoufox humanizes + back-and-forth scroll + variable dwell) and bumps
+**humanize to a slower cursor** — proving there's a human, not swapping IPs. Only
+after `behavioral_retries_before_rotate` does it rotate the exit. (`discover._behavioral_warmup`,
+`stealth` behavioral branch; unit-tested in `test_stealth.py`.)
+- **Honest gap:** validated only in unit tests — I haven't hit a live PerimeterX
+  behavioral block to confirm the warmup actually clears one in the wild. The
+  mechanism is real; the field proof is pending a real block.
 
 ### 3. Click-gated data
 Data behind a **button/tab click** with no distinct URL — "load more", market

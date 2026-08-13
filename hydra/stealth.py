@@ -80,6 +80,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                       explicit: str | dict | None = None, start: str = "native",
                       strategy: str = "adaptive", max_attempts: int = 4,
                       base_backoff: float = 2.0, fp_retries_before_rotate: int = 1,
+                      behavioral_retries_before_rotate: int = 2,
                       challenge_wait_ms: int = 6000, headless: bool = True,
                       interact: bool = True, scroll_steps: int = 6,
                       storage_state: str | None = None, expect: str | None = None,
@@ -120,13 +121,16 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
 
     attempts: list[Attempt] = []
     fp_tries = 0
+    beh_tries = 0
+    warmup = False                         # behavioral-heal state (escalated below)
+    humanize = True
     last = None                            # best result seen, for the final report
 
     for n in range(1, max_attempts + 1):
         result = capture(url, proxy=exit_, headless=headless,
                          challenge_wait_ms=challenge_wait_ms,
                          interact=interact, scroll_steps=scroll_steps,
-                         storage_state=storage_state)
+                         storage_state=storage_state, warmup=warmup, humanize=humanize)
         v = diagnose(result)
         if not v.blocked:
             last = result
@@ -157,13 +161,29 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
             if v.layer == "ip":
                 new = _fresh_exit(pool, tried)
                 exit_, att.move = new, f"IP-layer block → rotate exit → {_label(new)}"
-                fp_tries = 0
-            else:  # fingerprint / behavioral / unknown — a JS challenge
+                fp_tries = beh_tries = 0
+                warmup, humanize = False, True
+            elif v.layer == "behavioral":
+                # not an IP problem — prove there's a human on the SAME exit: warm up
+                # (jittered mouse/scroll/dwell) + slower humanize; rotate only if that
+                # keeps failing.
+                beh_tries += 1
+                if beh_tries > behavioral_retries_before_rotate:
+                    new = _fresh_exit(pool, tried)
+                    exit_, att.move = new, f"behavioral persists → rotate exit → {_label(new)}"
+                    beh_tries = 0
+                    warmup, humanize = False, True
+                else:
+                    warmup = True
+                    humanize = 2.0        # slower, more human cursor (Camoufox seconds)
+                    att.move = "behavioral block → warm up (human interaction) + slower humanize, same exit"
+            else:  # fingerprint / unknown — a JS challenge
                 fp_tries += 1
                 if fp_tries > fp_retries_before_rotate:
                     new = _fresh_exit(pool, tried)
                     exit_, att.move = new, f"patience failed → rotate exit → {_label(new)}"
                     fp_tries = 0
+                    warmup, humanize = False, True
                 else:
                     att.move = "same exit, fresh fingerprint + patience"
 
