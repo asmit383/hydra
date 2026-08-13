@@ -18,6 +18,12 @@
 - [x] Interaction pass — scroll to fire infinite-scroll / paginated APIs.
 - [x] SSR extraction — `__NEXT_DATA__`, `__APOLLO_STATE__`, `ld+json`.
 - [x] Next.js **App Router (RSC)** — reassemble `__next_f` streams, harvest records.
+- [x] **Content-scored extraction** — rank record sets by content signal (money keys
+      like price/sku/offers weighted 10× over name/author/rating), and sample the
+      richest record — so the *product+price* wins over config/taxonomy/reviews.
+      Fixed StockX/Vinted/Home Depot previewing config instead of the price.
+- [x] **Behavioral healing** — warmup (jittered mouse/scroll/dwell) + slower humanize
+      on the same exit for a diagnosed behavioral block (see below).
 
 **Stealth / access**
 - [x] Camoufox launch, 3 proxy modes (native/file/explicit), geoip aligned to exit.
@@ -58,6 +64,11 @@ after `behavioral_retries_before_rotate` does it rotate the exit. (`discover._be
 - **Honest gap:** validated only in unit tests — I haven't hit a live PerimeterX
   behavioral block to confirm the warmup actually clears one in the wild. The
   mechanism is real; the field proof is pending a real block.
+- **Next refinement:** the warmup moves to *random* coordinates. A real human moves
+  *toward things* — buttons, images, the price. Bias the moves toward visible
+  interactive elements (`page.locator("a, button").bounding_box()` → move near
+  those) so the cursor drifts over real targets, not empty space. And make the
+  warmup **progressive** — each retry: more moves + slower humanize.
 
 ### 3. Click-gated data
 Data behind a **button/tab click** with no distinct URL — "load more", market
@@ -94,8 +105,13 @@ automation.
 - [ ] `--out data.json` on `capture` — save the **full** records, not just samples.
 - [ ] Collapse paginated `?page=1..N` candidates into one parameterized endpoint.
 
-## Credibility ⬜
-- [ ] Tests + CI (the `tests/` dir is a stub).
+## Credibility
+- [x] Unit suite — 29 tests, ~fast, no browser; covers discover/embed/diagnose/
+      session/gen/cli/stealth and encodes the fixed bugs so they can't regress.
+- [x] Breadth harness — `examples/battle_test.py` runs capture over a URL list and
+      reports ok/empty/error per site (the "hold up in the wild" test).
+- [~] CI — `.github/workflows/tests.yml` written but **not committed** (push token
+      lacks GitHub `workflow` scope); add it via the GitHub UI.
 - [ ] README demo gif; Show HN.
 
 ---
