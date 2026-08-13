@@ -92,26 +92,24 @@ def _native(page, cx, cy):
 
 
 def _ours(page, cx, cy):
-    # vary the *structure* every time — a fixed "human" routine is itself a pattern.
-    # Humans sometimes go direct, sometimes overshoot, sometimes hesitate.
+    # Humans are EFFICIENT — mostly direct to the target, imperfect only occasionally.
+    # Constant wandering is *less* human, not more. So overshoot/hesitate are rare.
     r = random.random()
-    if r < 0.2:                                    # direct (humans do this too)
+    if r < 0.70:                                   # mostly direct — the human default
         page.mouse.move(cx, cy)
-    elif r < 0.55:                                 # single overshoot + correct
-        page.mouse.move(cx + random.randint(-70, 70), cy + random.randint(-55, 55))
-        page.wait_for_timeout(random.randint(80, 220))
+    elif r < 0.88:                                 # occasional overshoot + correct
+        page.mouse.move(cx + random.randint(-55, 55), cy + random.randint(-45, 45))
+        page.wait_for_timeout(random.randint(70, 170))
         page.mouse.move(cx, cy)
-    elif r < 0.8:                                  # wander + overshoot + settle
-        page.mouse.move(cx + random.randint(-140, 140), cy + random.randint(-100, 100))
-        page.wait_for_timeout(random.randint(90, 240))
-        page.mouse.move(cx + random.randint(-50, 50), cy + random.randint(-40, 40))
-        page.wait_for_timeout(random.randint(80, 200))
+    elif r < 0.96:                                 # rare hesitation, then go
+        page.mouse.move(cx + random.randint(-22, 22), cy + random.randint(-18, 18))
+        page.wait_for_timeout(random.randint(240, 540))
         page.mouse.move(cx, cy)
-    else:                                          # hesitate, then go
-        page.mouse.move(cx + random.randint(-30, 30), cy + random.randint(-25, 25))
-        page.wait_for_timeout(random.randint(260, 620))
+    else:                                          # rare full wander (distraction)
+        page.mouse.move(cx + random.randint(-130, 130), cy + random.randint(-95, 95))
+        page.wait_for_timeout(random.randint(90, 210))
         page.mouse.move(cx, cy)
-    page.wait_for_timeout(random.randint(40, 180))
+    page.wait_for_timeout(random.randint(40, 170))
     page.mouse.click(cx, cy)
 
 
