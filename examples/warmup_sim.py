@@ -92,12 +92,26 @@ def _native(page, cx, cy):
 
 
 def _ours(page, cx, cy):
-    page.mouse.move(cx + random.randint(-120, 120), cy + random.randint(-90, 90))   # wander in
-    page.wait_for_timeout(random.randint(100, 240))
-    page.mouse.move(cx + random.randint(-55, 55), cy + random.randint(-40, 40))     # overshoot
-    page.wait_for_timeout(random.randint(90, 200))
-    page.mouse.move(cx, cy)                                                          # settle
-    page.wait_for_timeout(random.randint(70, 150))
+    # vary the *structure* every time — a fixed "human" routine is itself a pattern.
+    # Humans sometimes go direct, sometimes overshoot, sometimes hesitate.
+    r = random.random()
+    if r < 0.2:                                    # direct (humans do this too)
+        page.mouse.move(cx, cy)
+    elif r < 0.55:                                 # single overshoot + correct
+        page.mouse.move(cx + random.randint(-70, 70), cy + random.randint(-55, 55))
+        page.wait_for_timeout(random.randint(80, 220))
+        page.mouse.move(cx, cy)
+    elif r < 0.8:                                  # wander + overshoot + settle
+        page.mouse.move(cx + random.randint(-140, 140), cy + random.randint(-100, 100))
+        page.wait_for_timeout(random.randint(90, 240))
+        page.mouse.move(cx + random.randint(-50, 50), cy + random.randint(-40, 40))
+        page.wait_for_timeout(random.randint(80, 200))
+        page.mouse.move(cx, cy)
+    else:                                          # hesitate, then go
+        page.mouse.move(cx + random.randint(-30, 30), cy + random.randint(-25, 25))
+        page.wait_for_timeout(random.randint(260, 620))
+        page.mouse.move(cx, cy)
+    page.wait_for_timeout(random.randint(40, 180))
     page.mouse.click(cx, cy)
 
 

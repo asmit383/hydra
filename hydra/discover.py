@@ -138,16 +138,24 @@ def _autoscroll(page, steps: int, pause: int) -> None:
 def _behavioral_warmup(page) -> None:
     """Human-presence signals to heal a *behavioral*-layer block (PerimeterX etc.):
     jittered mouse movement (Camoufox humanize curves it into a human trajectory),
-    small back-and-forth scrolls, and variable dwell — so the session doesn't read
-    as an instant, mouse-less bot. The move timing is randomized (non-metronomic)."""
+    scrolls, and variable dwell. Critically, the **structure is randomized** every
+    call — count, order, whether it scrolls at all — because a *fixed* "human"
+    routine is itself a detectable pattern. Variance is the human signal, not the
+    routine."""
     try:
-        for _ in range(random.randint(3, 6)):
-            page.mouse.move(random.randint(80, 1160), random.randint(80, 720))
-            page.wait_for_timeout(random.randint(180, 700))   # jittered, not fixed
-        page.mouse.wheel(0, random.randint(300, 900))
-        page.wait_for_timeout(random.randint(500, 1400))      # dwell / read time
-        page.mouse.wheel(0, -random.randint(100, 400))
-        page.wait_for_timeout(random.randint(400, 1100))
+        actions = [("move", random.randint(60, 1180), random.randint(60, 740))
+                   for _ in range(random.randint(3, 7))]
+        if random.random() < 0.75:
+            actions.append(("scroll", random.randint(250, 900)))
+        if random.random() < 0.5:
+            actions.append(("scroll", -random.randint(120, 500)))
+        random.shuffle(actions)                       # vary the order — no fixed shape
+        for a in actions:
+            if a[0] == "move":
+                page.mouse.move(a[1], a[2])
+            else:
+                page.mouse.wheel(0, a[1])
+            page.wait_for_timeout(random.randint(120, 700))   # jittered, non-metronomic
     except Exception:
         pass
 
