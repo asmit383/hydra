@@ -87,14 +87,15 @@ def _geoip_for(proxy: dict | None):
 
 @contextmanager
 def launch(proxy: dict | None = None, headless: bool = True,
-          storage_state: str | None = None, humanize=True):
+          storage_state: str | None = None, humanize=True, geoip=None):
     """Yield a fresh Camoufox page. `proxy` is a dict (from pick_proxy / parse_proxy)
     or None for the native ISP IP. `storage_state` is a path to a saved session
     (cookies + localStorage from `hydra login`). `humanize` is True, or a float =
-    max cursor-movement duration in seconds — bumped up when healing a behavioral
-    block, so the mouse moves slower/more human. Fresh browser per call."""
+    max cursor-movement duration in seconds. `geoip` overrides the alignment — pass the
+    EXIT host when routing through a localhost relay, so geoip matches the exit, not
+    localhost; default None → align to `proxy`. Fresh browser per call."""
     with Camoufox(headless=headless, humanize=humanize,
-                  geoip=_geoip_for(proxy), proxy=proxy,
+                  geoip=(geoip if geoip is not None else _geoip_for(proxy)), proxy=proxy,
                   os=["windows", "macos"]) as browser:
         if storage_state:
             ctx = browser.new_context(storage_state=storage_state)

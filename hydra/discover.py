@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from hydra.embed import EmbeddedBlob, extract_embedded
@@ -164,11 +165,18 @@ def _behavioral_warmup(page) -> None:
 _CLEARANCE_NAMES = {"_abck", "datadome", "cf_clearance", "_px", "ak_bmsc", "bm_sv"}
 
 
+@contextmanager
+def _keep(page):
+    """No-op context manager yielding an already-open page — so capture() can run on a
+    PERSISTENT session (the session-heal loop) without launching/closing a browser."""
+    yield page
+
+
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             headless: bool = True, challenge_wait_ms: int = 6000,
             interact: bool = True, scroll_steps: int = 6,
             scroll_pause: int = 1200, storage_state: str | None = None,
-            humanize=True, warmup: bool = False) -> CaptureResult:
+            humanize=True, warmup: bool = False, page=None) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
@@ -271,8 +279,10 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     html = ""
     doc_headers: dict = {}                         # main-document response headers
     clearance: list[str] = []                      # clearance cookies minted (_abck/_px/…)
-    with launch(proxy=proxy, headless=headless, storage_state=storage_state,
-                humanize=humanize) as page:
+    # reuse a PERSISTENT page if given (session-heal loop); else launch a fresh browser.
+    _ctx = _keep(page) if page is not None else launch(
+        proxy=proxy, headless=headless, storage_state=storage_state, humanize=humanize)
+    with _ctx as page:
         page.on("response", on_response)          # register BEFORE navigating!
         page.on("websocket", on_ws)               # capture live streams too
         try:
@@ -317,6 +327,11 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                          if c.get("name") in _CLEARANCE_NAMES]
         except Exception:
             pass
+        for _ev, _h in (("response", on_response), ("websocket", on_ws)):
+            try:                                   # remove listeners so a REUSED page stays clean
+                page.remove_listener(_ev, _h)
+            except Exception:
+                pass
 
     # if goto timed out (heavy SPA — networkidle never fires) resp was None, so fall back
     # to the main-document response captured live. Otherwise we lose WHY we were blocked.

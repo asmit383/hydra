@@ -141,8 +141,7 @@ def _cmd_capture(args: argparse.Namespace) -> int:
         # stay quiet on a clean first hit; narrate only when actually healing
         if att.verdict.blocked:
             d = getattr(att, "detv", None)
-            klass = (f"{d.block_class} → {d.transition} → {d.lever}" if d
-                     else f"{att.verdict.kind} · layer {att.verdict.layer}")
+            klass = d.block_class if d else f"{att.verdict.kind}·{att.verdict.layer}"
             print(f"  {red('✗')} attempt {att.n} {att.via}  {red(klass)} → {yellow(att.move)}", file=ps)
         elif "rotate exit" in att.move:
             print(f"  {yellow('~')} attempt {att.n} {att.via}  {yellow(att.move)}", file=ps)

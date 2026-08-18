@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 
 from hydra.diagnose import Verdict, diagnose
 from hydra.discover import ApiCandidate, capture
+from hydra.heal import HealSession
 from hydra.session import load_proxies, parse_proxy
 
 
@@ -110,112 +111,93 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                 return False
         return True
 
-    pool = [parse_proxy(explicit)] if explicit else load_proxies(proxies_file)
-    tried: set[str] = set()
+    exits = [e for e in ([parse_proxy(explicit)] if explicit else load_proxies(proxies_file)) if e]
 
-    if start == "proxy" or strategy == "rotate":
-        exit_ = _fresh_exit(pool, tried)
-    else:
-        exit_ = None                       # native first — the patient default
-    if start != "proxy":
-        tried.add("native")
+    def _apply_lever(session, lever, att) -> None:
+        """Execute the truth-table lever on the LIVE session (hot; relaunch is nuclear)."""
+        if lever == "patience":
+            session.patience()
+            att.move = "transient → patience (wait, same session)"
+        elif lever == "rotate_exit":
+            r = session.rotate()
+            if r == "hot":
+                att.move = "rate/IP → rotate exit (relay) — keep fp+session"
+            elif r == "cold":
+                att.move = "rate/IP → native→proxy (new session, geoip aligned)"
+            else:
+                session.relaunch()
+                att.move = "rate/IP → rotate (no pool) → relaunch"
+        elif lever == "drop_session":
+            session.drop_session()
+            att.move = "session/quota → drop session, keep fp"
+        else:                                  # relaunch / fingerprint / unknown
+            session.relaunch()
+            att.move = "fingerprint → relaunch (new fp + session)"
 
+    # ONE persistent session held across attempts — the levers mutate it in place.
+    session = HealSession(exits, headless=headless, storage_state=storage_state).open()
     attempts: list[Attempt] = []
-    fp_tries = 0
-    beh_tries = 0
-    warmup = False                         # behavioral-heal state (escalated below)
-    humanize = True
-    last = None                            # best UNblocked result, for the final report
-    last_any = None                        # most recent result even if blocked — for the trace
-
-    for n in range(1, max_attempts + 1):
-        result = capture(url, proxy=exit_, headless=headless,
-                         challenge_wait_ms=challenge_wait_ms,
-                         interact=interact, scroll_steps=scroll_steps,
-                         storage_state=storage_state, warmup=warmup, humanize=humanize)
-        last_any = result                  # keep the terminal state so the trace shows WHY
-        detv = None
-        try:                                   # vendor-free detector DRIVES the decision when we have signals
-            from hydra.detect import classify
-            detv = classify(result.signals) if result.signals is not None else None
-        except Exception:
+    last = None                                # best UNblocked result, for the final report
+    last_any = None                            # most recent result even if blocked — for the trace
+    try:
+        for n in range(1, max_attempts + 1):
+            result = capture(url, page=session.page, challenge_wait_ms=challenge_wait_ms,
+                             interact=interact, scroll_steps=scroll_steps)
+            last_any = result
             detv = None
-        v = detv if detv is not None else diagnose(result)   # truth-table when signals; diagnose fallback
-        if not v.blocked:
-            last = result
-        att = Attempt(n, _label(exit_), v, len(result.candidates))
-        att.detv = detv
-        attempts.append(att)
+            try:                               # vendor-free detector DRIVES the decision (Part 1)
+                from hydra.detect import classify
+                detv = classify(result.signals) if result.signals is not None else None
+            except Exception:
+                detv = None
+            v = detv if detv is not None else diagnose(result)
+            if not v.blocked:
+                last = result
+            att = Attempt(n, session.label(), v, len(result.candidates))
+            att.detv = detv
+            attempts.append(att)
 
-        # terminal / not-a-block classes from the vendor-free detector — don't spin on these.
-        if detv is not None and detv.block_class == "no_data_channel":
-            att.move = "no API channel (SSR) — not a block, stop"     # heal can't invent an API
-            if on_attempt:
-                on_attempt(att)
-            return HealResult(bool(result.embedded or result.candidates),
-                              result.candidates, attempts, result=result)
-        if detv is not None and detv.blocked and not detv.self_heal:  # auth_required / hard_verify
-            att.move = f"terminal: {detv.block_class} — needs a human/solver"
-            if on_attempt:
-                on_attempt(att)
-            return HealResult(False, result.candidates, attempts, result=result)
+            # terminal / not-a-block classes — don't spin.
+            if detv is not None and detv.block_class == "no_data_channel":
+                att.move = "no API channel (SSR) — not a block, stop"
+                if on_attempt:
+                    on_attempt(att)
+                return HealResult(bool(result.embedded or result.candidates),
+                                  result.candidates, attempts, result=result)
+            if detv is not None and detv.blocked and not detv.self_heal:  # auth / hard_verify
+                att.move = f"terminal: {detv.block_class} — needs a human/solver"
+                if on_attempt:
+                    on_attempt(att)
+                return HealResult(False, result.candidates, attempts, result=result)
 
-        if not v.blocked and _met(result):
-            att.move = "done"
-            if on_attempt:
-                on_attempt(att)
-            return HealResult(True, result.candidates, attempts, result=result)
+            if not v.blocked and _met(result):
+                att.move = "done"
+                if on_attempt:
+                    on_attempt(att)
+                return HealResult(True, result.candidates, attempts, result=result)
 
-        # ---- escalate for the next attempt ----------------------------------
-        if n >= max_attempts:
-            att.move = "give up (out of attempts)"
-        elif not v.blocked:  # not blocked, but the result is thin / expected data
-            new = _fresh_exit(pool, tried)   # didn't fire → geo-degraded: try another exit
-            why = f"expected '{expect}' missing" if expect else \
-                  f"only {len(result.candidates)} endpoint(s)"
-            exit_, att.move = new, f"{why} → rotate exit → {_label(new)}"
-            fp_tries = 0
-        elif strategy == "static":
-            att.move = "retry same exit (patience only)"
-        elif strategy == "rotate":
-            exit_ = _fresh_exit(pool, tried)
-            att.move = f"rotate → {_label(exit_)}"
-        else:  # adaptive: react to which layer leaked
-            if v.layer == "ip":
-                new = _fresh_exit(pool, tried)
-                exit_, att.move = new, f"IP-layer block → rotate exit → {_label(new)}"
-                fp_tries = beh_tries = 0
-                warmup, humanize = False, True
-            elif v.layer == "behavioral":
-                # not an IP problem — prove there's a human on the SAME exit: warm up
-                # (jittered mouse/scroll/dwell) + slower humanize; rotate only if that
-                # keeps failing.
-                beh_tries += 1
-                if beh_tries > behavioral_retries_before_rotate:
-                    new = _fresh_exit(pool, tried)
-                    exit_, att.move = new, f"behavioral persists → rotate exit → {_label(new)}"
-                    beh_tries = 0
-                    warmup, humanize = False, True
+            # ---- escalate: apply the truth-table lever ON THE LIVE SESSION ------
+            if n >= max_attempts:
+                att.move = "give up (out of attempts)"
+            elif not v.blocked:                # thin / geo-degraded 200 → rotate exit
+                if session.rotate():
+                    att.move = f"thin result ({len(result.candidates)} ep) → rotate exit (keep session)"
                 else:
-                    warmup = True
-                    humanize = 2.0        # slower, more human cursor (Camoufox seconds)
-                    att.move = "behavioral block → warm up (human interaction) + slower humanize, same exit"
-            else:  # fingerprint / unknown — a JS challenge
-                fp_tries += 1
-                if fp_tries > fp_retries_before_rotate:
-                    new = _fresh_exit(pool, tried)
-                    exit_, att.move = new, f"patience failed → rotate exit → {_label(new)}"
-                    fp_tries = 0
-                    warmup, humanize = False, True
-                else:
-                    att.move = "same exit, fresh fingerprint + patience"
+                    session.relaunch()
+                    att.move = "thin result → relaunch (no pool)"
+            else:
+                lever = detv.lever if detv is not None else \
+                    ("rotate_exit" if v.layer == "ip" else "relaunch")
+                _apply_lever(session, lever, att)
 
-        if on_attempt:
-            on_attempt(att)
-        if n < max_attempts:
-            time.sleep(base_backoff * (2 ** (n - 1)))   # 2s, 4s, 8s...
+            if on_attempt:
+                on_attempt(att)
+            if n < max_attempts:
+                time.sleep(base_backoff * (2 ** (n - 1)))   # 2s, 4s, 8s…
 
-    # never met the expectation — hand back the best result: an unblocked one if we got
-    # one, else the last blocked capture so its signals still explain WHY we're blocked.
-    final = last if last is not None else last_any
-    return HealResult(False, final.candidates if final else [], attempts, result=final)
+        # out of attempts — hand back the best result (unblocked if we got one, else the
+        # last blocked capture so its signals still explain WHY we're blocked).
+        final = last if last is not None else last_any
+        return HealResult(False, final.candidates if final else [], attempts, result=final)
+    finally:
+        session.close()
