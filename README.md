@@ -28,9 +28,11 @@ Hydra goes one level deeper and closes the loop:
   intercepts the XHR/fetch traffic, and discovers the internal JSON endpoint +
   its auth. If there's no API (server-rendered pages), it reads the data inlined
   in the HTML instead — including modern Next.js App Router streams.
-- **Adaptive, self-healing stealth.** When it hits a block, it **diagnoses the
-  vendor and which fingerprint layer leaked**, then heals — patience first, then a
-  fresh fingerprint, then a fresh exit — instead of silently dying.
+- **Adaptive, self-healing stealth.** When it hits a block it detects it
+  **vendor-free** — anchoring on whether it actually got the data, not on recognizing a
+  vendor — classifies *which* block it is from the response, and heals on a **live
+  session**: rotate the exit (keeping the fingerprint + warm session), drop the session,
+  wait it out, or relaunch — the cheapest fix first, instead of blindly cycling proxies.
 
 It's not a scraper — it's a **resilient automation primitive** that anyone
 automating the web can build on, the way you build on Camoufox itself.
@@ -92,24 +94,37 @@ silently dropped.
 
 ## Self-healing through blocks
 
-`capture` heals automatically. To *watch* the diagnosis (useful for demos), use `heal`:
-```bash
-hydra heal <url> --proxy-str ip:port:user:pass
-```
-```
-attempt 1 via native ISP IP
-  ✗ BLOCKED · datadome · leaked layer: ip
-    DataDome interstitial → rotate to a clean exit IP + back off
-attempt 2 via 203.0.113.9:8000
-  ✓ through · 4 candidate endpoint(s)
-```
-The ladder is **patience-first**: on a JS challenge (DataDome/Cloudflare) Hydra
-first waits for the challenge to auto-solve and relaunches for a fresh fingerprint,
-and only rotates the exit when the block is IP-layer (403/429/geo) or patience
-fails. Blindly rotating a proxy often makes a fingerprint challenge *worse*.
+`capture` heals automatically. It detects a block **vendor-free** — anchoring on the
+one signal an adversary can't fake (*did I get the data?*), then reading the response
+(status, headers, clearance cookies, challenge shape) to classify *which* block it is
+— and maps it to the cheapest lever on a **persistent session**:
 
-`--strategy static` (one exit, no escalation) is the baseline; `examples/heal_bench.py`
-measures adaptive-vs-static recovery rate.
+| detected block | lever | keeps |
+|---|---|---|
+| transient JS challenge | **patience** — wait it out | fingerprint + session |
+| rate-limit / IP | **rotate exit** (swappable relay) | fingerprint + session |
+| session / quota | **drop session** — clear cookies | fingerprint |
+| fingerprint | **relaunch** — new identity (last resort) | — |
+| auth / hard captcha | **stop** — needs a human | — |
+| no API (SSR) | not a block — just parse the page | — |
+
+The ladder is **patience-first**, and rotation is *hot*: a local relay swaps the exit IP
+**without relaunching**, so the warm clearance cookie survives. Blindly rotating a proxy
+often makes a fingerprint challenge *worse* — a clean native IP + a fresh fingerprint
+often beats a flagged proxy.
+
+**Watch it react to each block on command** (a local simulator mints each block class —
+real antibot blocks are probabilistic, so this is the only way to demo every lever):
+```bash
+python examples/blocksim.py --ip          # 403 → rotate exit
+python examples/blocksim.py --session      # 412 → drop session, keep fingerprint
+python examples/blocksim.py --transient     # "Just a moment" → patience, same session
+python examples/blocksim.py --auth          # → stops cleanly (needs a human)
+python examples/blocksim.py                 # unclassifiable block → cost-ladder fallback
+```
+`examples/relay_rotate.py` proves the hot rotation end-to-end: the exit IP changes while
+the fingerprint *and* the session cookie are preserved. `hydra heal <url>` prints the
+full per-attempt trace for a single URL.
 
 ## Proxies
 
@@ -184,10 +199,14 @@ The session file holds cookies + tokens — it's a **credential**. Hydra writes 
 
 ## Status
 🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
-content-type, **plus WebSocket/SSE live streams**), self-healing through blocks,
-proxies with geo-gated retry, authenticated capture, and **`hydra gen`**
-(browser-free client codegen). Not yet covered: **WS replay** (capture works,
-codegen doesn't), typed-search, and click-gated data — see `phases.md`.
+content-type, **plus WebSocket/SSE live streams**), **vendor-free block detection**
+(oracle-anchored, keyed on the response not the brand), **session-preserving self-heal**
+(a persistent session + hot exit rotation via a relay that keeps fingerprint + clearance),
+proxies with geo-gated retry, authenticated capture, and **`hydra gen`** (browser-free
+client codegen). Honest edges: the self-heal's *mechanisms* are proven (see the demos)
+but its live-recovery rate on real hard blocks is unvalidated — real blocks are
+probabilistic. Not yet covered: **WS replay** (capture works, codegen doesn't),
+typed-search, click-gated data, and the SDK/MCP layer — see `phases.md`.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
 spoofing. Hydra is the *adaptive* layer above it.
