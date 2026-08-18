@@ -124,13 +124,15 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
     beh_tries = 0
     warmup = False                         # behavioral-heal state (escalated below)
     humanize = True
-    last = None                            # best result seen, for the final report
+    last = None                            # best UNblocked result, for the final report
+    last_any = None                        # most recent result even if blocked — for the trace
 
     for n in range(1, max_attempts + 1):
         result = capture(url, proxy=exit_, headless=headless,
                          challenge_wait_ms=challenge_wait_ms,
                          interact=interact, scroll_steps=scroll_steps,
                          storage_state=storage_state, warmup=warmup, humanize=humanize)
+        last_any = result                  # keep the terminal state so the trace shows WHY
         v = diagnose(result)
         if not v.blocked:
             last = result
@@ -192,5 +194,7 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         if n < max_attempts:
             time.sleep(base_backoff * (2 ** (n - 1)))   # 2s, 4s, 8s...
 
-    # never met the expectation — hand back the best (unblocked) result we did get
-    return HealResult(False, last.candidates if last else [], attempts, result=last)
+    # never met the expectation — hand back the best result: an unblocked one if we got
+    # one, else the last blocked capture so its signals still explain WHY we're blocked.
+    final = last if last is not None else last_any
+    return HealResult(False, final.candidates if final else [], attempts, result=final)
