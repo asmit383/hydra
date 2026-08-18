@@ -47,6 +47,135 @@ responses are recorded as SSE endpoints. Surfaced in JSON + pretty output.
   current state is site-specific and much harder than REST; `hydra gen` doesn't
   emit WS clients yet (capture shows the subscribe frames to build one by hand).
 
+---
+
+## Next phases — prioritized build order 🎯
+
+Re-ordered after an honest external review + a real run on a heavy, protected SPA.
+Ordered by **ROI first**, not by how interesting the work is.
+
+**Two tracks — pick by what you already know:**
+- **Known-target** (recon done, you have the URL): `capture <url>` → a handful of
+  candidates, trivial to distinguish. *Already solved — don't add machinery here.*
+- **Exploratory** (unknown mechanism or URL): needs to *reach and trigger* the data
+  — browse + AI curation. Everything below serves THIS track. Never force it on the
+  known-target case (broad browsing = more noise + wasted time).
+
+**Positioning (say it out loud):** the *browsing* is **commodity** — plenty of tools
+do LLM-drives-a-browser. The wedge is **API-recon + replay** (find the internal
+endpoint, classify its auth, hand back a *browser-free replayable client*) plus the
+**stealth body** that survives Akamai/DataDome where a vanilla agent 403s. Brain =
+the agent (bring your own key); **body = Hydra**.
+
+| # | Phase | Why this slot |
+|---|-------|---------------|
+| 0.5 | **Sane defaults — kill the footgun.** `domcontentloaded` + bounded waits; heal is **reactive-only, never proactive**; heavy modes (scroll/interact/heal) opt-in with a time budget. | A real run hung **10 min** on default flags (networkidle + proactive heal + scroll on a heavy SPA). Cheap fix, burned me twice. |
+| 1 | **Replay-verify + auth-classify + two replay paths.** Fire the captured request, assert same shape → candidate becomes **confirmed**. Label auth (`bearer`/`cookie`/`api-key`/**`signed-token`**) + TTL hint; flag paging params (`startIndex`/`offset`); detect **persisted-query GraphQL** (sha256-pinned → replay the exact `QueryName+hash`, never mutate). Two replay modes, chosen by auth-classify — **default is warm-session, browser-free is the exception:** **(a) warm-session** (`page.evaluate` fetch, `credentials:'include'`, session kept alive) is the **primary path** — most real targets need a clearance cookie (`_abck`/`_px`/`cf_clearance`) that is browser-bound + continuously re-minted by the page's sensor JS, so a lifted cookie 403s within seconds; **(b) browser-free** (httpx) only when `verify` *proves* the token is portable (anon Bearer, static API key, no clearance cookie). Guilty-until-proven-portable. | Highest ROI. Tells me *needs-warm-session (usual) vs headless-replayable (rare)*, and it's the exact primitive the MCP `fetch` tool needs. Warm-session replay is the generalization of how I actually scrape the hardest books (Goldbet: warm the page, let `_abck` settle, in-session fetch). |
+| 2 | **Browse-and-capture.** Navigate a human path to *reach* the data, capture on arrival, tag each candidate by the action that fired it. | Data often fires only deep in the site; the agent can't type the URL. Reach it without drowning in transit noise. |
+| 3 | **MCP + AI disambiguation.** Expose capture/heal/fetch/login/gen as tools; the agent picks which candidate is the data. | Depends on 1+2. This is "the AI does it by itself." |
+| 4 | **Empirical layer attribution.** Instrument the heal ladder to log *what-changed → did-it-unblock*. | Upgrades `diagnose` from a canned vendor→layer table to a *learned* prior. Earns its slot once there's real block data. |
+| 5 | **Productization + solver seam.** **Session-oriented SDK** (`with Hydra(...) as h: h.navigate/capture/fetch/heal` + raw `h.page`) — the *stateful session* the warm-`_abck` runtime needs, that **CLI / MCP / production scrapers all wrap** (one object, three interfaces). Then: pluggable human-verification seam, HAR regression tests, session-reuse/crawl, PyPI. | Lower urgency — **post-interview**. The warm-session requirement forces the SDK design anyway; build it once, get all three interfaces. |
+
+**Near-term demo:** a thin **MCP layer** (~a weekend) so an agent can drive Hydra
+live — the fastest way to *show* the loop rather than describe it.
+
+**Honesty corrections baked in (from the review):**
+- `diagnose` is a **vendor→layer playbook, not per-request detection** — a prior, not
+  proof. Frame it as "names the vendor + applies a playbook"; *learn* the real layer
+  via Phase 4.
+- Capture stores headers "for replay" but nothing **verifies** replay yet → Phase 1.
+- Auth is **dumped, not classified** → Phase 1.
+- Ranking picks *biggest*, not *the data* — the human/AI disambiguates → Phase 3.
+
+**Field finding — signed-token antibot (PerimeterX / HUMAN class).** Seen in the wild:
+HTML loads **200** (fingerprint passed), but every data XHR returns **412 Precondition
+Failed** because the API requires a `_px` cookie + a **signed token minted by the live
+browser's sensor** — a crafted or out-of-session replay never carries it. Actions:
+- `diagnose`: treat **412 on XHR while the HTML is 200** as a distinct signature →
+  "signed-token antibot; data needs an in-session fetch, not a crafted replay."
+- auth-classify (Phase 1) labels it **browser-minted / short-TTL → not
+  headless-replayable** → route to **warm-session replay**, not `gen`.
+- This is also the first real **behavioral wall** to validate the warmup ladder
+  against (the honest gap in §2 below) — the passive-fingerprint books never trip it.
+
+---
+
+## Detection is 6 layers — fingerprint spoofing defeats ONE 🧱
+
+An Amazon probe made this concrete: engine-level fingerprint spoofing (Camoufox)
+nails the static fingerprint, but that's **one** of six layers. The others are what
+"self-heal" has to reason about — and knowing which are *ceilings* is the honest edge.
+
+| # | Layer | Camoufox? | Move | Fixable / ceiling |
+|---|-------|-----------|------|-------------------|
+| 1 | Network / TLS (JA3/JA4) | ✅ | — | solved |
+| 2 | Browser / JS fingerprint | ✅ | — | solved |
+| 3 | **Behavioral** (mouse entropy, scroll, dwell) | ❌ | warmup + **real entropy** (micro-jitter over humanize; *"more ≠ human"*) | **fixable** |
+| 4 | **Automation instrumentation** (CDP/Juggler driving tells) | partial | human-timed actions, minimal `evaluate` surface | **hard ceiling** (sensor watches *how you drive* — the 412 wall) |
+| 5 | **Headless environment** (software GPU, no display/media) | partial | **run headful** | **mostly ceiling** (GPU-less box has physical tells) |
+| 6a | **IP reputation** | ❌ | rotate exits + **don't hammer** | **fixable + footgun** |
+| 6b | **Session / trust context** (cold: no cookies/referrer/account) | ❌ | **warm-context** (homepage→browse→target) | **fixable** |
+
+### Cheap wins (buildable fast — the pre-interview / near-term shortlist) ⚡
+- **Probe-pacing (layer 6a) — highest-value footgun fix.** Discovery that hammers a
+  target *burns the IP reputation it depends on* ("hammered Amazon all night → risk
+  climbed"). Pace/budget probes + rotate exits *while probing*, not just scraping.
+  Folds into **Phase 0.5** (sane defaults).
+- **Headful for hard targets (layer 5).** A lot of "headless detection" is just
+  detecting headless *mode*; `headless=False` kills that tell for ~free. Residual
+  software-GPU ceiling documented, not hidden.
+- **Warm-context mode (layer 6b).** Visit homepage → accept cookies → browse a step →
+  hit target, carrying cookies + a real **referrer chain**. This is **Phase 2
+  (browse-and-capture) doing double duty** — reaches the deep page *and* builds trust
+  context. One primitive, two payoffs.
+- **Behavioral entropy (layer 3).** Micro-jitter on top of humanize + scroll/dwell as
+  default warmup — refines the §2 behavioral remediation (entropy + purpose, not volume).
+
+Honest ceilings to **name, not claim**: automation-instrumentation (4) and machine
+signals (5) aren't beaten by spoofing harder — you beat them with a good environment
+and by not looking automated. That's the Akamai/PX sensor-VM territory.
+
+---
+
+## Phase 4 deep-dive — empirical attribution via orthogonal levers 🔬
+
+*(The design for making `diagnose` universal. **Not built** — today it's the canned
+table. This is "how I'd make it learn," not "how it works.")*
+
+**Key on the block, not the brand.** A signal (`429`) maps to *multiple* layers (IP /
+API-key / fingerprint / session), so it only gives **suspects**. The **culprit** comes
+from the empirical loop: a block is a **free binary oracle** — change one lever,
+re-request, the site labels it cleared/not-cleared. Change ONE lever holding the rest
+constant → if it clears, that dimension was the cause (recover + attribute at once) →
+log it → the table becomes a **learned prior** the measurement can overrule. Works on
+vendors never seen. **It's a contextual bandit, not full RL** (state=signal,
+arms=levers, reward=cleared; no sequential credit assignment).
+
+**The orthogonal-lever problem + fix.** Attribution needs to vary one factor holding
+others constant — but Camoufox sets factors at launch and **relaunch resets everything
++ re-rolls the fingerprint** (can't hold it constant or repeat it). Fix: **move factors
+off the launch lifecycle onto a live session** — 4 of 5 levers become *hot*:
+
+| Lever | Isolate via | Hot/Cold |
+|---|---|---|
+| IP / exit | **local proxy relay** (browser → `localhost`; swap upstream behind it) | 🔥 |
+| Session | `clear_cookies` / save+restore `storage_state` | 🔥 |
+| Auth token | fetch fresh token, swap header | 🔥 |
+| Behavioral | same session, drive differently | 🔥 |
+| Fingerprint | **pin it** (BrowserForge config) → relaunch changes *only* it, restore rest | ❄️ |
+
+Payoffs: **cost-ordering falls out** (hot=cheap, test first; fingerprint=expensive,
+last), and it **forces the session SDK** — orthogonal attribution is impossible with
+one-shot CLI calls; it needs a warm session with independent knobs. (Ties Phase 4 to
+the Phase-5 `Hydra` SDK — same substrate.)
+
+**Irreducible ceilings (name, don't claim to beat):** TLS-JA3 vs JS-fingerprint are
+coupled to the build (one engine = both); **server cross-binding** — Akamai binds the
+token to IP+TLS, so rotating IP alone kills the token (you orthogonalize *your* inputs,
+not *their* bindings); data-starved (only learns on real blocks → Amazon = training data).
+
+---
+
 ## NOT covered yet ⬜  (honest gaps — real mechanisms, not edge cases)
 
 ### 1. Typed-search interaction
@@ -113,6 +242,13 @@ automation.
 - [~] CI — `.github/workflows/tests.yml` written but **not committed** (push token
       lacks GitHub `workflow` scope); add it via the GitHub UI.
 - [ ] README demo gif; Show HN.
+- [ ] **6-layer stress harness (Amazon, dev-only, PACED).** Amazon trips all six
+      layers at once → the ideal punching-bag to develop behavioral/pacing/warm-context
+      against. **Must be paced** (dogfood the probe-pacing fix — hammering burns the IP
+      and gives a false negative). Dev + war-story only; **never** a live-demo target.
+- [ ] **Live-demo kit** — three-pane contrast (`curl` vs vanilla Chromium vs Hydra),
+      a summonable-block ladder (429 / local controlled harness), `heal_bench` runner,
+      + an **asciinema recording** as the wifi-dies backup. (See interview.md §12.)
 
 ---
 

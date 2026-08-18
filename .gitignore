@@ -15,3 +15,5 @@ runcrate.json
 *.session.json
 *.state.json
 .github/workflows/tests.yml
+interview.md
+agent_plan.md
