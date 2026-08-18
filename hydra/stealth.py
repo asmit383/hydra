@@ -54,6 +54,7 @@ class Attempt:
     verdict: Verdict
     n_candidates: int
     move: str = ""      # what the healer did next (escalation) or "done"
+    detv: object = None  # detect.Verdict — vendor-free block-class → transition → lever
 
 
 @dataclass
@@ -137,6 +138,11 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
         if not v.blocked:
             last = result
         att = Attempt(n, _label(exit_), v, len(result.candidates))
+        try:                                   # vendor-free classification (display; decision below unchanged)
+            from hydra.detect import classify
+            att.detv = classify(result.signals) if result.signals is not None else None
+        except Exception:
+            pass
         attempts.append(att)
 
         if not v.blocked and _met(result):
