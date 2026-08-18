@@ -134,16 +134,31 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
                          interact=interact, scroll_steps=scroll_steps,
                          storage_state=storage_state, warmup=warmup, humanize=humanize)
         last_any = result                  # keep the terminal state so the trace shows WHY
-        v = diagnose(result)
+        detv = None
+        try:                                   # vendor-free detector DRIVES the decision when we have signals
+            from hydra.detect import classify
+            detv = classify(result.signals) if result.signals is not None else None
+        except Exception:
+            detv = None
+        v = detv if detv is not None else diagnose(result)   # truth-table when signals; diagnose fallback
         if not v.blocked:
             last = result
         att = Attempt(n, _label(exit_), v, len(result.candidates))
-        try:                                   # vendor-free classification (display; decision below unchanged)
-            from hydra.detect import classify
-            att.detv = classify(result.signals) if result.signals is not None else None
-        except Exception:
-            pass
+        att.detv = detv
         attempts.append(att)
+
+        # terminal / not-a-block classes from the vendor-free detector — don't spin on these.
+        if detv is not None and detv.block_class == "no_data_channel":
+            att.move = "no API channel (SSR) — not a block, stop"     # heal can't invent an API
+            if on_attempt:
+                on_attempt(att)
+            return HealResult(bool(result.embedded or result.candidates),
+                              result.candidates, attempts, result=result)
+        if detv is not None and detv.blocked and not detv.self_heal:  # auth_required / hard_verify
+            att.move = f"terminal: {detv.block_class} — needs a human/solver"
+            if on_attempt:
+                on_attempt(att)
+            return HealResult(False, result.candidates, attempts, result=result)
 
         if not v.blocked and _met(result):
             att.move = "done"

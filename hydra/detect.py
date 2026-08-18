@@ -71,9 +71,13 @@ class Verdict:
     confidence: float
     reasons: list[str]        # the reasoning chain, for the verbose log
     signal: str               # one-line human summary
-    # back-compat with stealth.py's Verdict interface:
+    # back-compat with stealth.py / cli.py's diagnose.Verdict interface:
     layer: str = "unknown"
     action: str = ""
+
+    @property
+    def kind(self) -> str:      # alias so `.kind` consumers get the vendor-free block-class
+        return self.block_class
 
 
 def _edge(server: str) -> bool:
