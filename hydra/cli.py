@@ -152,6 +152,18 @@ def _cmd_capture(args: argparse.Namespace) -> int:
                           storage_state=args.state, expect=args.expect,
                           min_candidates=args.min_endpoints, on_attempt=on_attempt, **heal_kw)
 
+    # v0.3: print the vendor-free detection trace to stderr (every signal → verdict),
+    # so the terminal shows the full reasoning, not just the APIs. Never touches stdout.
+    _sig = getattr(r.result, "signals", None) if r.result is not None else None
+    if _sig is not None:
+        import contextlib
+        from hydra.detect import classify, log_trace
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                log_trace(_sig, classify(_sig), use_color=sys.stderr.isatty())
+        except Exception:
+            pass
+
     def _auth(c):
         return [k for k in c.request_headers
                 if k.lower() in ("authorization", "x-api-key", "cookie", "x-algolia-api-key")]

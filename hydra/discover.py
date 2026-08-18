@@ -78,6 +78,7 @@ class CaptureResult:
     block_signals: list[str]  # e.g. ["host:captcha-delivery.com", "status:403"]
     embedded: list[EmbeddedBlob] = field(default_factory=list)  # SSR-inlined data (v0.1.1)
     streams: list[StreamCandidate] = field(default_factory=list)  # WS/SSE (v0.2.x)
+    signals: object = None    # detect.Signals — rich vendor-free block signals (v0.3)
 
 
 def _is_noise(url: str) -> bool:
@@ -160,6 +161,9 @@ def _behavioral_warmup(page) -> None:
         pass
 
 
+_CLEARANCE_NAMES = {"_abck", "datadome", "cf_clearance", "_px", "ak_bmsc", "bm_sv"}
+
+
 def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             headless: bool = True, challenge_wait_ms: int = 6000,
             interact: bool = True, scroll_steps: int = 6,
@@ -178,6 +182,8 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     challenge_hosts: set[str] = set()
     streams: list[StreamCandidate] = []
     seen_stream: set[str] = set()
+    statuses: list[int] = []                  # every response status seen (scope signal)
+    doc = {"status": None, "headers": {}}     # main-doc status+headers — robust to goto timeout
 
     def on_ws(ws):
         # a WebSocket opened — capture its URL, the client's subscribe frames
@@ -205,6 +211,17 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         # This IS "the handler": Camoufox calls it for EVERY response automatically.
         u = response.url
         low = u.lower()
+        try:
+            statuses.append(response.status)      # scope signal — collected, never gates
+            # main-frame document → grab its status+headers LIVE (last one wins, so a
+            # 302→200 or challenge→cleared ends on the terminal state). This is why a
+            # goto timeout on a heavy SPA can't cost us the "why are we blocked" signal.
+            if (response.request.resource_type == "document"
+                    and response.frame.parent_frame is None):
+                doc["status"] = response.status
+                doc["headers"] = {k.lower(): v for k, v in (response.headers or {}).items()}
+        except Exception:
+            pass
         # record challenge hosts seen (to *name* a block) and never treat the
         # interstitial's own JSON as a data candidate.
         is_block = False
@@ -252,6 +269,8 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     final_url = url
     title = ""
     html = ""
+    doc_headers: dict = {}                         # main-document response headers
+    clearance: list[str] = []                      # clearance cookies minted (_abck/_px/…)
     with launch(proxy=proxy, headless=headless, storage_state=storage_state,
                 humanize=humanize) as page:
         page.on("response", on_response)          # register BEFORE navigating!
@@ -259,6 +278,8 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         try:
             resp = page.goto(url, wait_until="networkidle", timeout=45000)
             nav_status = resp.status if resp else None
+            if resp:                               # grab the doc headers while resp is alive
+                doc_headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
         except Exception:
             pass
         page.wait_for_timeout(wait_ms)            # let lazy / on-scroll XHR fire
@@ -291,6 +312,18 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             html = page.content()
         except Exception:
             pass
+        try:                                       # clearance cookies (_abck/_px/cf_clearance…)
+            clearance = [c["name"] for c in page.context.cookies()
+                         if c.get("name") in _CLEARANCE_NAMES]
+        except Exception:
+            pass
+
+    # if goto timed out (heavy SPA — networkidle never fires) resp was None, so fall back
+    # to the main-document response captured live. Otherwise we lose WHY we were blocked.
+    if nav_status is None:
+        nav_status = doc["status"]
+    if not doc_headers:
+        doc_headers = doc["headers"]
 
     # biggest data blob first — most likely the real listing/data endpoint
     candidates.sort(key=lambda c: c.size, reverse=True)
@@ -313,7 +346,30 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         if nav_status in (403, 429, 503):
             block.append(f"status:{nav_status}")
 
-    return CaptureResult(candidates, nav_status, final_url, title, block, embedded, streams)
+    # v0.3: build the rich, vendor-free Signals object (never gates capture — wrapped).
+    signals = None
+    try:
+        from hydra.detect import Signals
+        signals = Signals(
+            oracle_count=len(candidates) + len(embedded) + len(streams),
+            nav_status=nav_status,
+            statuses=sorted(set(statuses)),
+            redirected=(final_url != url),
+            body_len=len(html),
+            title=title,
+            content_type=doc_headers.get("content-type", ""),
+            server=doc_headers.get("server", ""),
+            retry_after=doc_headers.get("retry-after"),
+            ratelimit=any(k.startswith("x-ratelimit") for k in doc_headers),
+            www_authenticate=doc_headers.get("www-authenticate"),
+            clearance_cookies=clearance,
+            challenge_shape=bool(title_hit),
+        )
+    except Exception:
+        signals = None
+
+    return CaptureResult(candidates, nav_status, final_url, title, block, embedded,
+                         streams, signals)
 
 
 def discover(url: str, proxy: dict | None = None, wait_ms: int = 3500,
