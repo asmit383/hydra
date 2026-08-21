@@ -105,6 +105,24 @@ Balabit/SapiMouse extraction is the mouse's Aalto, not done).
 fingerprint gauntlets; the *behavioral* layer has no public scorer (validation = our own
 KS-harness + real-target get-through, both pending).
 
+**The SDK — SHIPPED (`hydra/sdk.py`).** `with Hydra(proxies=..., seed=...) as h:` — ONE
+persistent stealth object an AI *or* a plain script drives (one object, three interfaces; the
+AI is an optional consumer). Identity lifecycle baked in: one persona per session (Aalto),
+persona+fp+session travel together, **humanize=OFF / behavior always ours, no user knob**.
+Surface: `navigate · open/capture (discover+heal) · act (interaction) · observe (perception) ·
+type/click/move_to/idle (humanized) · fetch (warm-session replay) · page/persona/exit`.
+- **`observe()`** — visible, labeled interactive elements + **`box=[x,y,w,h]`** (disambiguate
+  same-label links) + stable id + `oauth` flag. The AI's eyes.
+- **`open()`/`act()` — context capture:** every discovered API tagged with the ACTION that
+  fired it (`fired_on`) → the action→API map (the Sisal-class fix).
+- **`fetch()`** — in-page `fetch(credentials:'include')` = warm-session replay.
+
+**Proven on real paid work — the SDK pulled LIVE odds off two protected books:** Staryes
+(Cloudflare, odds on load → `getTorneoCentrale`) and Sisal (Akamai+geo, warm→tree→card →
+`schedaManifestazione`), each in ~5 lines. The agent traversal it teaches: **enter the base
+page, warm, apply Hydra outward until the target — never cold-jump the deep URL** (the base
+page sets the cookie the fetches need).
+
 ---
 
 ## The vision — a self-mapping stealth body for AI agents 🧭
@@ -123,23 +141,28 @@ The browser is the **fallback**; the discovered API is the **fast path**; the ca
 itself** as the agent works. That's the differentiator vs a plain stealth body: it *learns the
 site's shortcuts while it operates.*
 
-**Built today:** the body (stealth + session-preserving self-heal), per-page discovery + `gen`
-(replay client), the keystroke behavioral layer. **Designed, not built:** the amortization
-engine, the agent interface, mouse realism.
+**Built now:** the body (stealth + session-preserving self-heal), discovery + `gen`, the
+**data-backed behavioral layer** (Aalto keystroke + MouseForge), and **the SDK** — `Hydra`
+object with `observe`, context capture (`fired_on`), warm-session `fetch`, proven pulling live
+odds off two protected books. **Designed, not built:** the amortization *store*, the MCP/agent
+layer, the tier-3 "got the target?" check.
 
 ### The moat to build: the amortization engine (discover-once → replay-forever)
-The "cheaper every session" magic needs three pieces, **none built yet**:
-1. **A persistent API store** — per-site: discovered endpoints + classified auth + schema,
-   saved across sessions. (`gen` seeds it — codegens *one* replay client — but there's no
-   accumulating per-site knowledge base.)
-2. **The router** — given a task: *known API? → replay (fast path). No? → drive the browser
-   (and discover).*
-3. **Session-spanning discovery** — accumulate APIs across every page an agent touches in a
-   run, not just one `capture()`.
+This is **already the manual workflow** (simone's own docstring: *"Endpoints discovered with
+Hydra"* — session 1 discovers, session 2+ warm+fetch). The store just automates it. Needs:
+1. **A persistent API store** — per-site: endpoints + classified auth + **warm-recipe** (base
+   URL to warm + endpoint pattern), saved across sessions. (Context capture's `fired_on` +
+   `fetch` are the ingredients; nothing persists them yet.)
+2. **The router** — given a task: *known recipe? → warm+replay (fast). No? → traverse + discover.*
+3. **Session-spanning discovery** — `h.context` accumulates within a run (built); persisting it
+   across runs is the missing half.
 
 ### Also missing (prioritized)
-- **Agent interface (MCP/SDK)** — how the LLM brain drives the body *and queries the API
-  store*. The interface to the whole vision (Phase 3 / 5).
+- **Agent/MCP layer** — the LLM driving `observe → decide → act`. The SDK primitives exist
+  (`observe`/`act`/`capture`/`fetch`); the brain-on-top is the remaining build. *(SDK itself:
+  ✅ shipped.)*
+- **The tier-3 "got the target?" check** — the semantic judgment that tells the traversal when
+  to stop (LLM). Without it the agent doesn't know it's arrived.
 - **Mouse realism — MECHANISM built (MouseForge), data model pending.** Per-persona generated
   trajectory (dense sampling, ease-in-out, sine bow, tremor, coherent with typing speed) +
   `human.idle` for the LLM-freeze gap; proven fleet-diverse (5000→5000). *Still needs:* the
