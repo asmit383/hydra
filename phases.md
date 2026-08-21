@@ -49,6 +49,91 @@ responses are recorded as SSE endpoints. Surfaced in JSON + pretty output.
 
 ---
 
+## Shipped since — detection rebuild, session-preserving heal, behavioral engine ✅
+
+**Vendor-free block detection (`detect.py`, v0.3).** Replaced the `diagnose` vendor→layer
+table with an **oracle-anchored** classifier: anchor on *did I get the data?* (the one signal
+the adversary can't fake), then sub-classify the failure from vendor-free signals (status,
+headers, clearance cookies, challenge-shape, edge-vs-origin) → block-class → cheapest lever.
+Full signal→reasoning→verdict trace. Validated live (StockX/Zillow clean, G2 403-but-data →
+clean, real 503 → rotate).
+
+**Session-preserving self-heal (`heal.py` + `relay.py`, v0.4).** The truth-table levers now
+execute on ONE persistent session: `patience` / `rotate` (a local **relay** swaps the exit IP
+with NO relaunch, keeping fingerprint + warm clearance) / `drop_session` (clear cookies, keep
+fp) / `relaunch` (nuclear, last). Proven: exit IP rotates while fingerprint + session cookie
+survive. Cost-ordered ladder — touch the fingerprint *last* (it's the only cold lever).
+
+**Behavioral engine — keystroke (`human.py`, v0.1).** The layer Camoufox does NOT own — its
+`humanize` is a mouse *path* only; there is no typing model and no keystroke dataset anywhere
+in it. A 3-level, **data-backed** keystroke model:
+- **digraph latency** (same-finger slow / hand-alternation fast — a *multiplier* on a
+  per-persona base, never a fixed ms),
+- **per-bigram individuality** (this typist's `th` ≠ their `he`, each stable),
+- **autocorrelated tempo** (Ornstein–Uhlenbeck drift — not IID), log-normal timing,
+  boundary pauses, dwell, and typo→backspace→retype.
+Never uses `fill()` (zero keystroke events = instant flag); drives real `keyboard` events
+(protocol-injected → `isTrusted`, unlike a `dispatchEvent` bot). Pure-model tested, no browser.
+
+**BehaviorForge (`behaviorforge.py`) + corpus pipeline (`corpus.py`).** The behavioral analog
+of BrowserForge: sample a *coherent* persona (one per session, tied to the identity — new
+fingerprint ⇒ new persona) from **real data**, not guessed independent ranges. The pipeline
+extracts per-user Persona vectors from the **Aalto 136M-keystroke** dataset
+(`vector_from_sections → build_corpus → PersonaGenerator.from_file`).
+- **Ran it: 3000 real typists extracted, and the digraph model VALIDATED on real data** —
+  alternation **160ms** < same-hand **169** < same-finger **188**. It also *corrected* two
+  guesses: my same-finger multiplier was too aggressive (real effect ~1.18×, not 1.6×), and
+  base↔dwell coupling is **weak in reality (~0.14)**, not the strong coupling my hand-authored
+  archetypes assumed. **Measured > guessed, live.**
+- **Scope: desktop-only, correctly** — Camoufox only generates desktop fingerprints
+  (`os=('linux','macos','windows')`), so mobile typing would be *incoherent* with the
+  fingerprint. Mouse realism is the remaining behavioral gap (see vision below).
+
+---
+
+## The vision — a self-mapping stealth body for AI agents 🧭
+
+Not a discovery tool — a **stealth body an AI agent drives** (fingerprint + self-adaptation +
+human behavior), with one catch: **as the agent operates, the body opportunistically
+reverse-engineers the site's internal API surface in the background.** So it *amortizes*:
+- **First session:** the agent drives the browser to do the task, *and* Hydra discovers +
+  classifies the APIs it passes.
+- **Next session:** those APIs are known → skip crawling, hit the API directly → **faster and
+  cheaper every session.**
+- **No useful API?** The agent does it through the browser (crawl/click) — *still* discovering
+  as it goes.
+
+The browser is the **fallback**; the discovered API is the **fast path**; the cache **fills
+itself** as the agent works. That's the differentiator vs a plain stealth body: it *learns the
+site's shortcuts while it operates.*
+
+**Built today:** the body (stealth + session-preserving self-heal), per-page discovery + `gen`
+(replay client), the keystroke behavioral layer. **Designed, not built:** the amortization
+engine, the agent interface, mouse realism.
+
+### The moat to build: the amortization engine (discover-once → replay-forever)
+The "cheaper every session" magic needs three pieces, **none built yet**:
+1. **A persistent API store** — per-site: discovered endpoints + classified auth + schema,
+   saved across sessions. (`gen` seeds it — codegens *one* replay client — but there's no
+   accumulating per-site knowledge base.)
+2. **The router** — given a task: *known API? → replay (fast path). No? → drive the browser
+   (and discover).*
+3. **Session-spanning discovery** — accumulate APIs across every page an agent touches in a
+   run, not just one `capture()`.
+
+### Also missing (prioritized)
+- **Agent interface (MCP/SDK)** — how the LLM brain drives the body *and queries the API
+  store*. The interface to the whole vision (Phase 3 / 5).
+- **Mouse realism — the weakest behavioral limb.** Camoufox's Bézier path + basic click, but
+  no persona-driven dynamics (velocity / Fitts / overshoot), no idle drift, no data model. The
+  keystroke side is data-backed (Aalto); mouse needs the same recipe (a "MouseForge" off
+  Balabit / SapiMouse). Matters because an agent doing real tasks moves the mouse *constantly*
+  — all behavioral surface.
+- **Warm-up / trust context** — arrive via homepage→browse→target (cookies + referrer +
+  history) instead of cold-loading a deep URL. Cheap, high antibot ROI, not built (layer 6b).
+
+---
+
 ## Next phases — prioritized build order 🎯
 
 Re-ordered after an honest external review + a real run on a heavy, protected SPA.
@@ -110,7 +195,7 @@ nails the static fingerprint, but that's **one** of six layers. The others are w
 |---|-------|-----------|------|-------------------|
 | 1 | Network / TLS (JA3/JA4) | ✅ | — | solved |
 | 2 | Browser / JS fingerprint | ✅ | — | solved |
-| 3 | **Behavioral** (mouse entropy, scroll, dwell) | ❌ | warmup + **real entropy** (micro-jitter over humanize; *"more ≠ human"*) | **fixable** |
+| 3 | **Behavioral** (keystroke timing, mouse, scroll, dwell) | ❌ | **keystroke: SHIPPED — data-backed model (Aalto corpus)**; mouse: Bézier path + basic click, no persona/data yet | **fixable — keystroke done, mouse (MouseForge) next** |
 | 4 | **Automation instrumentation** (CDP/Juggler driving tells) | partial | human-timed actions, minimal `evaluate` surface | **hard ceiling** (sensor watches *how you drive* — the 412 wall) |
 | 5 | **Headless environment** (software GPU, no display/media) | partial | **run headful** | **mostly ceiling** (GPU-less box has physical tells) |
 | 6a | **IP reputation** | ❌ | rotate exits + **don't hammer** | **fixable + footgun** |
@@ -184,6 +269,10 @@ APIs that fire only on **keystrokes** — Algolia, autocomplete, search-as-you-t
 - Approach: `--type "<query>"` — focus a search input, type, wait, intercept.
 
 ### 2. Behavioral-layer remediation — BUILT (mechanism), live-validation pending
+> **Update:** *keystroke* behavioral realism is now a full **data-backed engine**
+> (`human.py` + BehaviorForge + Aalto corpus — see "Shipped since"). This §2 covers the
+> **mouse warmup** remediation, which remains the weaker limb (see vision → *Mouse realism*).
+
 A diagnosed behavioral block (PerimeterX) now gets a **distinct** remediation, not
 the fingerprint bucket: on the SAME exit it runs a **warmup** (jittered mouse moves
 that Camoufox humanizes + back-and-forth scroll + variable dwell) and bumps

@@ -17,3 +17,8 @@ runcrate.json
 .github/workflows/tests.yml
 interview.md
 agent_plan.md
+behavioral.md
+
+# datasets (large, non-commercial license) — never commit
+data/
+*.zip
