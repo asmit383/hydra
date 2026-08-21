@@ -26,8 +26,11 @@ from hydra.human import Human
 from hydra.session import load_proxies, parse_proxy
 
 # cost-ordered heal ladder (cheapest → dearest, by what you lose) — used to ESCALATE when a
-# lever fails and the block recurs, instead of repeating the same failing lever.
-_LADDER = ("patience", "behave", "rotate_exit", "drop_session", "relaunch")
+# lever fails and the block recurs, instead of repeating the same failing lever. `patience` is
+# a humanized wait (drift, not a frozen cursor) — behavior is always on, so there is no separate
+# "act human" rung. `rotate_exit` is dropped for native / single-exit sessions (nothing to
+# rotate to) — see `_ladder` in __init__.
+_LADDER = ("patience", "rotate_exit", "drop_session", "relaunch")
 
 
 def _auth_of(headers: dict) -> list[str]:
@@ -73,6 +76,9 @@ class Hydra:
         exits = [parse_proxy(proxy)] if proxy else (load_proxies(proxies) if proxies else [])
         self._exits = [e for e in exits if e]
         self._on_proxy = bool(self._exits)            # start on the exit if any proxy was given
+        # native / single exit has no pool → the rotate rung is a dead no-op; drop it so the
+        # ladder is honest: patience(humanized) → drop_session → relaunch. A pool keeps rotate.
+        self._ladder = _LADDER if len(self._exits) >= 2 else tuple(l for l in _LADDER if l != "rotate_exit")
         # pin a concrete seed even if the user didn't → keystroke AND mouse share ONE identity
         self._seed = seed if seed is not None else random.randrange(1, 2**31)
         self._corpus, self._headful, self._state = corpus, headful, state
@@ -119,8 +125,9 @@ class Hydra:
                 interact: bool = True, scroll_steps: int = 6,
                 challenge_wait_ms: int = 6000, max_heal: int = 4):
         """Discover the page's data (APIs / SSR / streams), self-healing through blocks on the
-        PERSISTENT session with an **escalating** cost ladder (patience → behave → rotate →
-        drop_session → relaunch — walk DOWN a rung when the same block recurs, instead of
+        PERSISTENT session with an **escalating** cost ladder (patience → rotate → drop_session →
+        relaunch; rotate is dropped when there's no proxy pool) — walk DOWN a rung when the same
+        block recurs, instead of
         repeating a failing lever). Findings are merged into `h.context` (tagged `label`,
         dedup'd with open/act). `navigate=False` discovers the CURRENT page without
         re-navigating (composes with an open→act traversal). Returns the CaptureResult."""
@@ -135,13 +142,17 @@ class Hydra:
             if v is None or not v.blocked or not v.self_heal or attempt >= max_heal:
                 return result                                   # got it, or terminal, or out of tries
             # #5 escalate: same block recurs (lever didn't clear it) → next rung; else start at
-            # the diagnosed lever's rung.
+            # the diagnosed lever's rung — on THIS session's ladder.
             if v.block_class == last_class:
-                rung = min(rung + 1, len(_LADDER) - 1)
-            else:
-                rung = _LADDER.index(v.lever) if v.lever in _LADDER else 0
+                rung = min(rung + 1, len(self._ladder) - 1)
+            elif v.lever in self._ladder:
+                rung = self._ladder.index(v.lever)
+            elif v.lever == "rotate_exit":       # native/1-exit: no IP to rotate → relaunch is the only card
+                rung = len(self._ladder) - 1
+            else:                                # unknown / cost_ladder → walk the ladder from the top
+                rung = 0
             last_class = v.block_class
-            reopened = self._heal(_LADDER[rung])
+            reopened = self._heal(self._ladder[rung])
             do_nav = navigate or reopened                       # #6: re-nav only if asked, or reopened
         return result
 
@@ -162,10 +173,8 @@ class Hydra:
         """Apply a lever on the live session; RETURN whether the page was reopened (so capture
         knows it must re-navigate). Only a relaunch mints a new identity (rule 2)."""
         reopened = False
-        if lever == "patience":
-            self.session.patience()
-        elif lever == "behave":                   # #5: demonstrate humanity on the live session
-            self.human.idle(2500)
+        if lever == "patience":                   # humanized wait: the challenge clears while the
+            self.human.idle(4000)                 # cursor drifts — never a frozen page (behavior is default)
         elif lever == "drop_session":
             self.session.drop_session()
         elif lever == "rotate_exit":

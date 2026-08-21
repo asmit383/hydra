@@ -36,7 +36,7 @@ Hydra is the layer that fixes all three:
   session: fast typist ⇒ fast mouse.
 - **Self-heals through blocks.** Detects a block **vendor-free** (anchored on *did I get the
   data?*, not on recognizing a brand), and heals on a **live session** with a cost-ordered
-  ladder — patience → behave → rotate exit → drop session → relaunch — cheapest fix first.
+  ladder — patience → rotate exit → drop session → relaunch — cheapest fix first.
 
 It's not a scraper — it's a **stealth body** an AI *or* a plain script can drive.
 
@@ -180,15 +180,16 @@ recurs:
 
 | detected block | lever | keeps |
 |---|---|---|
-| transient JS challenge | **patience** — wait it out | fp + session + IP |
-| behavioral flag | **behave** — humanized activity on the live session | fp + session + IP |
+| transient JS challenge / behavioral flag | **patience** — a *humanized* wait (cursor drifts while it clears, never a frozen page) | fp + session + IP |
 | rate-limit / IP | **rotate exit** (hot relay swap) | fp + session |
 | session / quota | **drop session** (clear cookies) | fp + IP |
 | fingerprint | **relaunch** (new identity, last resort) | — |
 | auth / hard captcha | **stop** — needs a human | — |
 
 Cost-ordered: touch the fingerprint *last* (it's the only lever that burns the warm clearance
-you fought to earn).
+you fought to earn). There's no separate "act human" rung — behavior is always on, so even
+*waiting* is humanized. On a **native or single-proxy** session the rotate rung is dropped
+(nothing to rotate to): `patience → drop session → relaunch`.
 
 ## What it discovers
 

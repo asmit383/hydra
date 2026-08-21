@@ -58,7 +58,25 @@ def test_seed_is_pinned_even_without_one():
 
 def test_escalation_ladder_is_ordered():
     from hydra.sdk import _LADDER
-    assert _LADDER == ("patience", "behave", "rotate_exit", "drop_session", "relaunch")  # #5
+    # cost-ordered, cheapest→dearest; no "behave" rung (behavior is always on → patience is a
+    # humanized wait, not a separate "act human" lever)
+    assert _LADDER == ("patience", "rotate_exit", "drop_session", "relaunch")
+
+
+def test_native_and_single_exit_drop_the_rotate_rung():
+    from hydra import Hydra
+    # nothing to rotate to → the rotate rung is a no-op; the ladder must not include it
+    assert Hydra()._ladder == ("patience", "drop_session", "relaunch")              # native
+    assert Hydra(proxy="1.2.3.4:8000:u:p")._ladder == ("patience", "drop_session", "relaunch")  # 1 exit
+
+
+def test_patience_is_humanized_not_a_frozen_wait():
+    import inspect
+    from hydra.sdk import Hydra as H
+    src = inspect.getsource(H._heal)
+    assert "behave" not in src                       # the orphan rung is gone
+    # patience heals via the behavioral engine (idle/drift), not a dead page wait
+    assert 'lever == "patience"' in src and "self.human.idle" in src
 
 
 def test_capture_composes_with_traversal_and_tags():
