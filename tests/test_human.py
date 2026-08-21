@@ -121,10 +121,11 @@ from hydra.human import Human
 
 
 class _Mouse:
-    def __init__(self): self.moves = []; self.downs = 0; self.ups = 0
+    def __init__(self): self.moves = []; self.downs = 0; self.ups = 0; self.wheels = []
     def move(self, x, y): self.moves.append((x, y))
     def down(self): self.downs += 1
     def up(self): self.ups += 1
+    def wheel(self, dx, dy): self.wheels.append((dx, dy))
 
 
 class _Loc:                                          # doubles as locator and element
@@ -170,3 +171,12 @@ def test_click_traces_then_presses_and_holds(monkeypatch):
     p = _Page()
     Human(p, seed=4).click(_Loc(box={"x": 0, "y": 0, "width": 50, "height": 20}))
     assert len(p.mouse.moves) >= 2 and p.mouse.downs == 1 and p.mouse.ups == 1
+
+
+def test_scroll_uses_variable_distances_not_fixed(monkeypatch):
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    p = _Page()
+    Human(p, seed=5).scroll(steps=8)
+    dys = [dy for _, dy in p.mouse.wheels]
+    assert len(dys) >= 8                         # it scrolled
+    assert len(set(dys)) > 3                     # VARIABLE distances — not a fixed page-length each time

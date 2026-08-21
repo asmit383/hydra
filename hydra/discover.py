@@ -119,22 +119,29 @@ def _challenge_title(title: str) -> str | None:
     return next((t for t in _BLOCK_TITLES if t in low), None)
 
 
-def _autoscroll(page, steps: int, pause: int) -> None:
-    """Scroll the page in steps to fire infinite-scroll / lazy-loaded XHR. Safe:
-    scrolling never navigates away or submits anything — it just makes the page
-    ask for more data, which the response handler then catches. The single most
-    universal trigger; a lot of the web only fetches its data on scroll.
-
-    Uses a programmatic scrollTo(bottom) — that reliably fires the `scroll` events
-    infinite-scroll libraries listen on (a raw mouse wheel often doesn't), and each
-    step reaches the newly grown bottom to pull the next page."""
-    for _ in range(max(0, steps)):
+def _autoscroll(page, steps: int, pause: int, rng=None, scale: float = 1.0) -> None:
+    """Scroll the page to fire infinite-scroll / lazy-loaded XHR — HUMANIZED. A fixed
+    jump-to-bottom + a constant 1200px wheel + a constant pause every time is a robotic
+    signature (same distance, same rhythm). Instead: **variable-distance real wheel
+    scrolls, jittered reading pauses, and the occasional scroll-back** (re-reading). A
+    final scrollTo(bottom) backstops lazy-load libs that only fire at the true page end.
+    `rng` = a seeded `random.Random` from the session persona + `scale` = the persona's pace
+    → PERSONA-COHERENT when the SDK drives; falls back to the global `random` for the CLI
+    (still humanized, just not seeded). Safe: scrolling never navigates or submits."""
+    rng = rng or random
+    for i in range(max(0, steps)):
         try:
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.mouse.wheel(0, 1200)   # nudge — some libs also watch wheel events
+            page.mouse.wheel(0, rng.randint(300, 850))             # variable chunk, not fixed 1200
+            if i and rng.random() < 0.2:                           # occasional human re-read
+                page.wait_for_timeout(rng.randint(150, 500))
+                page.mouse.wheel(0, -rng.randint(120, 380))
         except Exception:
             break
-        page.wait_for_timeout(pause)
+        page.wait_for_timeout(int(rng.randint(int(pause * 0.4), int(pause * 1.6)) * scale))  # persona-paced dwell
+    try:
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")   # backstop: guarantee the end
+    except Exception:
+        pass
 
 
 def _behavioral_warmup(page) -> None:
@@ -176,7 +183,9 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             headless: bool = True, challenge_wait_ms: int = 6000,
             interact: bool = True, scroll_steps: int = 6,
             scroll_pause: int = 1200, storage_state: str | None = None,
-            humanize=True, warmup: bool = False, page=None) -> CaptureResult:
+            humanize=True, warmup: bool = False, page=None,
+            scroll_rng=None, scroll_scale: float = 1.0,
+            navigate: bool = True) -> CaptureResult:
     """Navigate `url` and return both the API candidates and the block evidence.
 
     `proxy` is a Camoufox proxy dict (from session.pick_proxy) or None for the
@@ -186,7 +195,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
     tactic). Blocked/not is decided from the *terminal* state, so a challenge that
     clears isn't a false positive. `discover()` is the thin candidates-only wrapper."""
     candidates: list[ApiCandidate] = []
-    seen: set[str] = set()
+    seen: set = set()                          # (url, body) keys — distinct POST/GraphQL ops kept
     challenge_hosts: set[str] = set()
     streams: list[StreamCandidate] = []
     seen_stream: set[str] = set()
@@ -237,7 +246,10 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             if b in low:
                 challenge_hosts.add(b)
                 is_block = True
-        if is_block or u in seen or _is_noise(u):
+        # dedup by URL *and* body: plain POST-GraphQL fires many operations to the SAME
+        # /graphql URL, differing only in the body — key on both so we don't lose them.
+        key = (u, response.request.post_data)
+        if is_block or key in seen or _is_noise(u):
             return
         # SSE stream? record the endpoint (can't read a streaming body) and move on.
         if "text/event-stream" in (response.headers or {}).get("content-type", "").lower():
@@ -259,7 +271,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         if not _looks_like_data(data):
             return
 
-        seen.add(u)
+        seen.add(key)
         shape, sample = _shape(data)
         req = response.request
         candidates.append(ApiCandidate(
@@ -286,10 +298,11 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
         page.on("response", on_response)          # register BEFORE navigating!
         page.on("websocket", on_ws)               # capture live streams too
         try:
-            resp = page.goto(url, wait_until="networkidle", timeout=45000)
-            nav_status = resp.status if resp else None
-            if resp:                               # grab the doc headers while resp is alive
-                doc_headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
+            if navigate:                           # navigate=False → discover the CURRENT page
+                resp = page.goto(url, wait_until="networkidle", timeout=45000)
+                nav_status = resp.status if resp else None
+                if resp:                           # grab the doc headers while resp is alive
+                    doc_headers = {k.lower(): v for k, v in (resp.headers or {}).items()}
         except Exception:
             pass
         page.wait_for_timeout(wait_ms)            # let lazy / on-scroll XHR fire
@@ -316,7 +329,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             _behavioral_warmup(page)
         # interaction pass: scroll to fire lazy / infinite-scroll / paginated XHR
         if interact and not _challenge_title(title):
-            _autoscroll(page, scroll_steps, scroll_pause)
+            _autoscroll(page, scroll_steps, scroll_pause, scroll_rng, scroll_scale)
         try:
             final_url = page.url
             html = page.content()

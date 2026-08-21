@@ -49,3 +49,49 @@ def test_context_capture_surface_exists():
     from hydra import Hydra
     for m in ("open", "act", "capture", "observe"):
         assert callable(getattr(Hydra, m, None))     # open()/act() = context-tagged capture
+
+
+def test_seed_is_pinned_even_without_one():
+    from hydra import Hydra
+    assert isinstance(Hydra()._seed, int)             # #4: concrete seed → coherent keys+mouse
+
+
+def test_escalation_ladder_is_ordered():
+    from hydra.sdk import _LADDER
+    assert _LADDER == ("patience", "behave", "rotate_exit", "drop_session", "relaunch")  # #5
+
+
+def test_capture_composes_with_traversal_and_tags():
+    import inspect
+    from hydra import Hydra
+    params = inspect.signature(Hydra.capture).parameters
+    assert "navigate" in params and "label" in params   # #6 navigate=False · #3 label
+
+
+def test_merge_feeds_context_dedups_by_body_and_summarizes_auth():
+    from hydra import Hydra
+    from hydra.discover import ApiCandidate
+    h = Hydra(); h._seen = set(); h.context = []
+    def cand(body, hdrs):
+        return ApiCandidate(url="http://x/a", method="POST", status=200, size=9, shape="dict",
+                            request_headers=hdrs, post_data=body, sample={})
+    class R: candidates = [cand("q1", {"Cookie": "secret"})]
+    h._merge(R(), "load")
+    assert len(h.context) == 1 and h.context[0]["fired_on"] == "load"
+    assert h.context[0]["auth"] == ["cookie"]          # #3: summary, not the secret value
+    h._merge(R(), "load")                              # same (url, body) → deduped
+    assert len(h.context) == 1
+    R.candidates = [cand("q2", {})]                    # same URL, different GraphQL body → kept
+    h._merge(R(), "act")
+    assert len(h.context) == 2
+
+
+def test_replay_forwards_auth_but_not_browser_headers():
+    from hydra.sdk import _replay_headers
+    fwd = _replay_headers({"Authorization": "Bearer tok", "Content-Type": "application/json",
+                           "X-Api-Key": "k1", "Cookie": "_abck=x", "Host": "site.com",
+                           "Origin": "https://site.com", "sec-fetch-mode": "cors",
+                           "User-Agent": "Mozilla"})
+    assert set(fwd) == {"Authorization", "Content-Type", "X-Api-Key"}   # auth + content-type
+    # cookies (credentials:'include') + browser-managed headers are NOT forwarded
+    assert not any(k.lower() in ("cookie", "host", "origin", "sec-fetch-mode", "user-agent") for k in fwd)

@@ -336,6 +336,22 @@ class Human:
             if spent < ms and self._rng.random() < 0.5:   # …with an occasional small drift
                 self.drift()
 
+    def scroll(self, *, steps: int | None = None) -> None:
+        """Humanized scrolling — variable-distance real wheel scrolls with persona-paced
+        reading pauses + the occasional scroll-back. PERSONA-COHERENT (a slower typist
+        scrolls and reads slower). Never a fixed distance/rhythm — that's the robotic tell."""
+        n = steps if steps is not None else self._rng.randint(4, 8)
+        scale = self.persona.base_ms / 135.0
+        for i in range(n):
+            try:
+                self.page.mouse.wheel(0, self._rng.randint(280, 820))   # variable chunk
+                if i and self._rng.random() < 0.2:                      # occasional re-read
+                    time.sleep(self._rng.uniform(0.15, 0.5))
+                    self.page.mouse.wheel(0, -self._rng.randint(120, 380))
+            except Exception:
+                break
+            time.sleep(self._rng.uniform(0.3, 1.1) * scale)             # reading dwell, persona-paced
+
     def click(self, target) -> None:
         """Move to an interior point (Camoufox humanizes the PATH), settle, then press with
         a human hold — never a teleport-click, never dead-center."""
