@@ -17,10 +17,24 @@ deterministic and callable directly, no LLM required.
 from __future__ import annotations
 
 from hydra.detect import classify
-from hydra.discover import capture as _capture
+from hydra.discover import (_BLOCK_HOSTS, _is_noise, _looks_like_data, _shape,
+                            capture as _capture)
 from hydra.heal import HealSession
 from hydra.human import Human
 from hydra.session import load_proxies, parse_proxy
+
+
+def _auth_of(headers: dict) -> list[str]:
+    """Summarize the auth on a request WITHOUT echoing secret values (never leak cookies)."""
+    h = {k.lower(): str(v) for k, v in headers.items()}
+    tags = []
+    if h.get("authorization", "").lower().startswith("bearer"):
+        tags.append("bearer")
+    if "cookie" in h:
+        tags.append("cookie")
+    if any("api-key" in k or "x-api" in k or "apikey" in k for k in h):
+        tags.append("api-key")
+    return tags
 
 
 def _make_persona(seed, corpus_path):
@@ -53,6 +67,8 @@ class Hydra:
                                    storage_state=self._state,
                                    humanize=False).open(on_proxy=self._on_proxy)  # rule 3: humanize OFF
         self._bind_human()
+        self._seen: set[str] = set()      # endpoints already captured this session (dedup)
+        self.context: list[dict] = []     # every candidate + WHICH action fired it
         return self
 
     def __exit__(self, *a):
@@ -115,6 +131,59 @@ class Hydra:
     def _reidentify(self):
         """A relaunch = a new device = a new person (rule 2)."""
         self.persona = _make_persona(None, self._corpus)
+
+    # ── context capture: tag each discovered API with the ACTION that fired it ──
+    def _record(self, do, label, wait_ms):
+        """Run `do()` (a navigate or a click) while intercepting responses, and capture the
+        NEW data endpoints it triggers — each TAGGED with `label` (the action). Reuses the
+        discovery filters (noise / looks-like-data / shape). Dedup'd across the session."""
+        import json as _json
+        page, new = self.session.page, []
+
+        def on_resp(response):
+            try:
+                u, low = response.url, response.url.lower()
+                if u in self._seen or _is_noise(u) or any(b in low for b in _BLOCK_HOSTS):
+                    return
+                ctype = (response.headers or {}).get("content-type", "").lower()
+                if any(b in ctype for b in ("image/", "font/", "video/", "audio/",
+                                            "text/css", "javascript")):
+                    return
+                data = response.json()
+                if not _looks_like_data(data):
+                    return
+                self._seen.add(u)
+                shape, sample = _shape(data)
+                req = response.request
+                cand = {"url": u, "method": req.method, "status": response.status,
+                        "shape": shape, "sample": sample, "size": len(_json.dumps(data)),
+                        "auth": _auth_of(req.headers), "fired_on": label}   # ← the CONTEXT
+                new.append(cand)
+                self.context.append(cand)
+            except Exception:
+                pass
+
+        page.on("response", on_resp)
+        try:
+            do()
+            page.wait_for_timeout(wait_ms)
+        finally:
+            page.remove_listener("response", on_resp)
+        return new
+
+    def open(self, url: str, *, label: str = "load", wait_ms: int = 3000) -> list[dict]:
+        """Navigate + capture the APIs that fire on LOAD, tagged `label`. Like navigate(),
+        but records what fired (the start of a context-tagged interaction session)."""
+        return self._record(
+            lambda: self.session.page.goto(url, wait_until="domcontentloaded", timeout=30000),
+            label, wait_ms)
+
+    def act(self, target, label: str = "", *, wait_ms: int = 2500) -> list[dict]:
+        """Click `target` (a selector or an observe() id) and capture the APIs that click
+        TRIGGERS, tagged with `label`. This is how interaction-gated data — odds behind a
+        click, a market tab, a sport switch — gets discovered *with the action that reveals
+        it*. New candidates are returned and appended to `h.context`."""
+        return self._record(lambda: self.click(target), label, wait_ms)
 
     # ── behavioral actions (delegate to Human; act by selector OR observe() id) ─
     def _resolve(self, target):

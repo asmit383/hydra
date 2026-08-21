@@ -35,3 +35,17 @@ def test_humanize_is_off_and_not_a_user_knob():
     assert "humanize" not in params           # rule 3: no user knob
     src = inspect.getsource(H.__enter__)
     assert "humanize=False" in src            # baked in
+
+
+def test_auth_summary_flags_but_never_leaks_secrets():
+    from hydra.sdk import _auth_of
+    tags = _auth_of({"Authorization": "Bearer supersecret.jwt.token",
+                     "Cookie": "_abck=SECRETVALUE; session=xyz", "X-Api-Key": "k-123"})
+    assert set(tags) == {"bearer", "cookie", "api-key"}     # presence flagged
+    assert not any("supersecret" in t or "SECRETVALUE" in t or "k-123" in t for t in tags)  # NO values
+
+
+def test_context_capture_surface_exists():
+    from hydra import Hydra
+    for m in ("open", "act", "capture", "observe"):
+        assert callable(getattr(Hydra, m, None))     # open()/act() = context-tagged capture
