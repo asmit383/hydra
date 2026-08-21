@@ -29,11 +29,12 @@ def _lag1_autocorr(xs):
 
 # ── 1. digraph latency — timing correlates with the KEY PAIR ───────────────────
 def test_digraph_same_finger_slower_than_alternation():
-    # "ki" = same finger (right, i-finger); "th" = hand alternation (left→right)
-    assert _digraph_mult("k", "i") == 1.6          # same finger — slowest
-    assert _digraph_mult("t", "h") == 0.85         # alternation — fastest
-    assert _digraph_mult("j", "k") == 1.15         # same hand, different finger
-    assert _digraph_mult("k", "i") > _digraph_mult("t", "h")
+    # "ki" = same finger (right, i-finger); "th" = hand alternation (left→right).
+    # Values MEASURED from the Aalto corpus (was guessed 1.6/1.15/0.85).
+    assert _digraph_mult("k", "i") == 1.06         # same finger — slowest
+    assert _digraph_mult("t", "h") == 0.80         # alternation — fastest
+    assert _digraph_mult("j", "k") == 0.92         # same hand, different finger
+    assert _digraph_mult("k", "i") > _digraph_mult("j", "k") > _digraph_mult("t", "h")
 
 
 def test_per_bigram_offsets_distinct_but_stable():
@@ -113,3 +114,59 @@ def test_tok_maps_special_keys():
 def test_never_uses_fill():
     src = Path(__file__).resolve().parent.parent / "hydra" / "human.py"
     assert ".fill(" not in src.read_text()          # fill() = zero keystrokes = instant flag
+
+
+# ── mouse orchestration (browser-free via a fake page) ─────────────────────────
+from hydra.human import Human
+
+
+class _Mouse:
+    def __init__(self): self.moves = []; self.downs = 0; self.ups = 0
+    def move(self, x, y): self.moves.append((x, y))
+    def down(self): self.downs += 1
+    def up(self): self.ups += 1
+
+
+class _Loc:                                          # doubles as locator and element
+    def __init__(self, box=None, els=None): self._box, self._els = box, els or []
+    def bounding_box(self): return self._box
+    def all(self): return self._els
+    def click(self): self._box = self._box           # marker; has .click → treated as locator
+
+
+class _Page:
+    def __init__(self, targets=None):
+        self.mouse = _Mouse()
+        self.viewport_size = {"width": 1200, "height": 800}
+        self._targets = targets or []
+    def locator(self, sel): return _Loc(els=[_Loc(box=b) for b in self._targets])
+
+
+def test_point_in_stays_inside_and_off_center():
+    h = Human(_Page(), seed=1)
+    box = {"x": 100, "y": 200, "width": 80, "height": 40}
+    xs = [h._point_in(box) for _ in range(50)]
+    assert all(100 <= x <= 180 and 200 <= y <= 240 for x, y in xs)   # inside
+    assert not any(x == 140 and y == 220 for x, y in xs)             # never dead-center
+
+
+def test_idle_fills_the_wait_not_frozen(monkeypatch):
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    p = _Page()
+    Human(p, seed=2).idle(20000)                     # a real LLM-wait: gentle, not frozen
+    assert len(p.mouse.moves) >= 1                   # cursor stayed alive — NOT frozen
+
+
+def test_drift_traces_a_path(monkeypatch):
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    box = {"x": 300, "y": 300, "width": 60, "height": 60}
+    p = _Page(targets=[box])
+    Human(p, seed=3).drift()
+    assert len(p.mouse.moves) >= 1                   # a stepped trajectory, not a teleport
+
+
+def test_click_traces_then_presses_and_holds(monkeypatch):
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    p = _Page()
+    Human(p, seed=4).click(_Loc(box={"x": 0, "y": 0, "width": 50, "height": 20}))
+    assert len(p.mouse.moves) >= 2 and p.mouse.downs == 1 and p.mouse.ups == 1

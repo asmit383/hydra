@@ -114,11 +114,13 @@ def vector_from_sections(sections: list[list[tuple]], *, min_keys: int = 150) ->
     shift = (_median(shifted_flights) - base_ms) if len(shifted_flights) >= 20 else 55.0
 
     return {
-        "base_ms": round(_clamp(base_ms, 60, 300), 1),
-        "flight_sigma": round(_clamp(_log_std(flights), 0.15, 0.40), 3),
-        "dwell_ms": round(_clamp(_median(dwells) if dwells else 85, 40, 140), 1),
-        "dwell_sigma": round(_clamp(_log_std(dwells) if dwells else 0.2, 0.12, 0.30), 3),
-        "error_rate": round(_clamp(n_back / max(n_keys, 1), 0.002, 0.05), 4),
+        "base_ms": round(_clamp(base_ms, 60, 320), 1),
+        # clamps widened to the REAL Aalto range — the old tight caps (0.40/0.05) truncated
+        # real variance, pinning many personas to identical values (a fleet-diversity leak).
+        "flight_sigma": round(_clamp(_log_std(flights), 0.15, 0.70), 3),
+        "dwell_ms": round(_clamp(_median(dwells) if dwells else 85, 40, 170), 1),
+        "dwell_sigma": round(_clamp(_log_std(dwells) if dwells else 0.2, 0.12, 0.45), 3),
+        "error_rate": round(_clamp(n_back / max(n_keys, 1), 0.002, 0.13), 4),
         # ~approximated (marked): tempo from autocorrelation, think from the pause tail
         "tempo_theta": round(_clamp(1.0 - acf, 0.05, 0.15), 3),
         "tempo_sigma": round(_clamp(flight_cv * 0.2, 0.04, 0.09), 3),

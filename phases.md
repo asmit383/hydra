@@ -80,14 +80,30 @@ of BrowserForge: sample a *coherent* persona (one per session, tied to the ident
 fingerprint ⇒ new persona) from **real data**, not guessed independent ranges. The pipeline
 extracts per-user Persona vectors from the **Aalto 136M-keystroke** dataset
 (`vector_from_sections → build_corpus → PersonaGenerator.from_file`).
-- **Ran it: 3000 real typists extracted, and the digraph model VALIDATED on real data** —
-  alternation **160ms** < same-hand **169** < same-finger **188**. It also *corrected* two
-  guesses: my same-finger multiplier was too aggressive (real effect ~1.18×, not 1.6×), and
-  base↔dwell coupling is **weak in reality (~0.14)**, not the strong coupling my hand-authored
-  archetypes assumed. **Measured > guessed, live.**
+- **Ran it: 3000 real typists extracted, digraph model VALIDATED then CALIBRATED on real
+  data.** Measured multipliers (bigram flight / typist's base): alternation **0.80**,
+  same-hand **0.92**, same-finger **1.06** — `_digraph_mult` now uses these (I'd *guessed*
+  0.85/1.15/1.6; same-finger was ~50% too strong → robotic typing). Also corrected: base↔dwell
+  coupling is **weak in reality (~0.14)**, not the strong coupling I assumed; and my clamp
+  bounds truncated real variance (pinned err/sigma → widened to the real range). **Measured >
+  guessed, live — the data corrected my guesses three times.**
 - **Scope: desktop-only, correctly** — Camoufox only generates desktop fingerprints
-  (`os=('linux','macos','windows')`), so mobile typing would be *incoherent* with the
-  fingerprint. Mouse realism is the remaining behavioral gap (see vision below).
+  (`os=('linux','macos','windows')`), so mobile typing would be *incoherent* with the fingerprint.
+
+**Mouse behavioral layer — MouseForge (`mouseforge.py`).** Camoufox's `humanize` is ONE
+algorithm → every agent moves identically → a fleet signature at scale. So the trajectory is
+generated per-persona: **dense sampling** (~1 pt/4px — sparse sampling was a "botistic" tell),
+ease-in-out velocity, sine-arc bow, small tremor, coherent with the typing persona (fast typist
+→ fast mouse). **Proven diverse: 5000 sessions → 5000 distinct paths.** Plus `human.idle` — a
+gentle idle drift that fills the LLM round-trip so the cursor isn't FROZEN between agent actions
+(the agent-specific tell). **Honest:** mouse has no dataset yet — real motor-science models
+(minimum-jerk/Fitts/tremor) with guessed params; structurally-human, not measured-human (the
+Balabit/SapiMouse extraction is the mouse's Aalto, not done).
+
+**Stealth benchmark run:** Sannysoft **30/31** (1 fail = Firefox correctly lacking
+`window.chrome`); CreepJS **0% headless / 0% stealth-detected**. The *body* passes the standard
+fingerprint gauntlets; the *behavioral* layer has no public scorer (validation = our own
+KS-harness + real-target get-through, both pending).
 
 ---
 
@@ -124,11 +140,11 @@ The "cheaper every session" magic needs three pieces, **none built yet**:
 ### Also missing (prioritized)
 - **Agent interface (MCP/SDK)** — how the LLM brain drives the body *and queries the API
   store*. The interface to the whole vision (Phase 3 / 5).
-- **Mouse realism — the weakest behavioral limb.** Camoufox's Bézier path + basic click, but
-  no persona-driven dynamics (velocity / Fitts / overshoot), no idle drift, no data model. The
-  keystroke side is data-backed (Aalto); mouse needs the same recipe (a "MouseForge" off
-  Balabit / SapiMouse). Matters because an agent doing real tasks moves the mouse *constantly*
-  — all behavioral surface.
+- **Mouse realism — MECHANISM built (MouseForge), data model pending.** Per-persona generated
+  trajectory (dense sampling, ease-in-out, sine bow, tremor, coherent with typing speed) +
+  `human.idle` for the LLM-freeze gap; proven fleet-diverse (5000→5000). *Still needs:* the
+  **data model** — real params off Balabit/SapiMouse (the mouse's Aalto), and external
+  validation. Structurally-human today, not yet measured-human.
 - **Warm-up / trust context** — arrive via homepage→browse→target (cookies + referrer +
   history) instead of cold-loading a deep URL. Cheap, high antibot ROI, not built (layer 6b).
 
@@ -195,7 +211,7 @@ nails the static fingerprint, but that's **one** of six layers. The others are w
 |---|-------|-----------|------|-------------------|
 | 1 | Network / TLS (JA3/JA4) | ✅ | — | solved |
 | 2 | Browser / JS fingerprint | ✅ | — | solved |
-| 3 | **Behavioral** (keystroke timing, mouse, scroll, dwell) | ❌ | **keystroke: SHIPPED — data-backed model (Aalto corpus)**; mouse: Bézier path + basic click, no persona/data yet | **fixable — keystroke done, mouse (MouseForge) next** |
+| 3 | **Behavioral** (keystroke timing, mouse, scroll, dwell) | ❌ | **keystroke: SHIPPED — data-backed (Aalto, digraph calibrated)**; **mouse: SHIPPED — MouseForge (per-persona trajectory, fleet-diverse) + LLM-freeze idle**; mouse *data model* (Balabit) pending | **mechanism done; measured-mouse + external validation next** |
 | 4 | **Automation instrumentation** (CDP/Juggler driving tells) | partial | human-timed actions, minimal `evaluate` surface | **hard ceiling** (sensor watches *how you drive* — the 412 wall) |
 | 5 | **Headless environment** (software GPU, no display/media) | partial | **run headful** | **mostly ceiling** (GPU-less box has physical tells) |
 | 6a | **IP reputation** | ❌ | rotate exits + **don't hammer** | **fixable + footgun** |

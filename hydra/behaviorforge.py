@@ -92,14 +92,15 @@ class PersonaGenerator:
         a = rng.choice(self.corpus)                 # bootstrap: resample a real-ish person
         speed = rng.gauss(1.0, 0.05)                # shared tempo → keeps timings coherent
         return Persona(
-            base_ms=_clamp(a.base_ms * speed * rng.gauss(1, 0.02), 60, 300),
-            dwell_ms=_clamp(a.dwell_ms * speed * rng.gauss(1, 0.02), 40, 140),
+            base_ms=_clamp(a.base_ms * speed * rng.gauss(1, 0.02), 60, 320),
+            dwell_ms=_clamp(a.dwell_ms * speed * rng.gauss(1, 0.02), 40, 170),
             think_ms=_clamp(a.think_ms * speed * rng.gauss(1, 0.03), 100, 650),
             mouse_settle=_clamp(a.mouse_settle * speed, 0.03, 0.16),
             shift_ms=_clamp(a.shift_ms * rng.gauss(1, 0.05), 25, 120),
-            flight_sigma=_clamp(a.flight_sigma * rng.gauss(1, 0.05), 0.15, 0.40),
-            dwell_sigma=_clamp(a.dwell_sigma * rng.gauss(1, 0.05), 0.12, 0.30),
-            error_rate=_clamp(a.error_rate * rng.gauss(1, 0.10), 0.002, 0.04),
+            # widened to the real Aalto range (old caps pinned err/sigma → fleet-diversity leak)
+            flight_sigma=_clamp(a.flight_sigma * rng.gauss(1, 0.05), 0.15, 0.70),
+            dwell_sigma=_clamp(a.dwell_sigma * rng.gauss(1, 0.05), 0.12, 0.45),
+            error_rate=_clamp(a.error_rate * rng.gauss(1, 0.10), 0.002, 0.13),
             tempo_theta=a.tempo_theta,
             tempo_sigma=a.tempo_sigma,
             seed=seed,

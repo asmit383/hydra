@@ -39,6 +39,8 @@ import random
 import time
 from dataclasses import dataclass, field
 
+from hydra.mouseforge import MouseForge, trajectory
+
 # ── QWERTY hand/finger map (US layout) — the basis of digraph latency ──────────
 # finger id: 0-4 left (pinky→index), 5-9 right (index→pinky). hand = id < 5.
 _ROWS = {
@@ -54,17 +56,18 @@ def _finger(ch: str) -> int | None:
 
 
 def _digraph_mult(prev: str, cur: str) -> float:
-    """Flight-time multiplier for a key pair — the core human correlation.
-    same finger → slow (you can't move one finger twice instantly); same hand →
-    medium; opposite hands → fast (the fingers move in parallel)."""
+    """Flight-time multiplier for a key pair — the core human correlation. Values MEASURED
+    from 3000 real Aalto typists (median bigram flight / the typist's own base): same finger
+    slowest, hand-alternation fastest. The real spread is far gentler than the intuitive
+    guess (same-finger 1.06×, not 1.6×) — measured, not invented."""
     a, b = _finger(prev), _finger(cur)
     if a is None or b is None:
         return 1.0
     if a == b:
-        return 1.6                       # same finger — the slowest transition
+        return 1.06                      # same finger — slowest (measured; was a guessed 1.6)
     if (a < 5) == (b < 5):
-        return 1.15                      # same hand, different finger
-    return 0.85                          # hand alternation — the fastest
+        return 0.92                      # same hand, different finger (was 1.15)
+    return 0.80                          # hand alternation — fastest (was 0.85)
 
 
 _SHIFT_SYMBOLS = set('~!@#$%^&*()_+{}|:"<>?')
@@ -233,29 +236,123 @@ class Human:
     session (coherence). Engine-agnostic: only the `page` API, so it ports to
     Chromium and wraps unchanged as an MCP tool."""
 
-    def __init__(self, page, *, persona: Persona | None = None, seed: int | None = None):
+    def __init__(self, page, *, persona: Persona | None = None, seed: int | None = None,
+                 mouse_forge: MouseForge | None = None):
         self.page = page
         self.model = KeystrokeModel(persona, seed=seed)
         self.persona = self.model.persona
         self._rng = random.Random(
             (self.persona.seed or 0) + 1 if self.persona.seed is not None else seed)
+        # ONE coherent mouse persona per session (fast typist ⇒ fast mouse), and we
+        # GENERATE the trajectory ourselves — so no two agents move alike (fleet diversity).
+        self.mouse = (mouse_forge or MouseForge()).generate(
+            seed, typing_base_ms=self.persona.base_ms)
+        self._pos: tuple[float, float] | None = None   # tracked cursor position
 
     def _locate(self, target):
         """Accept a CSS selector string OR a Playwright Locator (SDK-friendly)."""
         return target if hasattr(target, "click") else self.page.locator(target)
 
-    def click(self, target) -> None:
-        """Move to a random interior point (Camoufox humanizes the PATH), settle,
-        then press with a human hold — never a teleport-click."""
-        loc = self._locate(target)
-        box = loc.bounding_box()
-        if not box:                                   # not visible/measurable → safe fallback
-            loc.click()
+    def _point_in(self, box) -> tuple[float, float]:
+        """A random interior point of a box — never dead-center (that's a tell)."""
+        return (box["x"] + box["width"] * self._rng.uniform(0.25, 0.75),
+                box["y"] + box["height"] * self._rng.uniform(0.3, 0.7))
+
+    def _viewport(self) -> dict:
+        return getattr(self.page, "viewport_size", None) or {"width": 1280, "height": 800}
+
+    def _targets(self) -> list:
+        """VISIBLE, in-viewport interactive elements. Humans move toward these — and we SKIP
+        off-screen ones: moving toward an element below the fold flings the cursor out of
+        view (the 'weird wandering'). Degrades to [] on any error."""
+        vp, boxes = self._viewport(), []
+        try:
+            for loc in self.page.locator("a, button, input, [role=button]").all()[:40]:
+                b = loc.bounding_box()
+                if (b and b["width"] > 4 and b["height"] > 4
+                        and 0 <= b["x"] <= vp["width"] and 0 <= b["y"] <= vp["height"]):
+                    boxes.append(b)
+        except Exception:
+            pass
+        return boxes
+
+    def _cursor(self) -> tuple[float, float]:
+        if self._pos is None:
+            vp = self._viewport()
+            self._pos = (vp["width"] / 2, vp["height"] / 2)
+        return self._pos
+
+    def _trace_to(self, x: float, y: float) -> None:
+        """Step a PERSONA-GENERATED trajectory to (x,y) — our own curve/velocity/tremor,
+        not Camoufox's fleet-identical one — updating the tracked cursor position."""
+        x0, y0 = self._cursor()
+        for px, py, dt in trajectory(self.mouse, x0, y0, x, y, self._rng):
+            try:
+                self.page.mouse.move(px, py)
+            except Exception:
+                pass
+            if dt:
+                time.sleep(dt / 1000.0)
+        self._pos = (x, y)
+
+    def move_to(self, target) -> None:
+        """Humanized move onto an element via the generated trajectory, then settle."""
+        try:
+            box = self._locate(target).bounding_box()
+        except Exception:
             return
-        x = box["x"] + box["width"] * self._rng.uniform(0.3, 0.7)
-        y = box["y"] + box["height"] * self._rng.uniform(0.35, 0.65)
-        self.page.mouse.move(x, y)                    # Camoufox draws the human curve
-        time.sleep(self.persona.mouse_settle)
+        if box:
+            x, y = self._point_in(box)
+            self._trace_to(x, y)
+            time.sleep(self.mouse.settle_ms / 1000.0)
+
+    def drift(self) -> None:
+        """A SMALL, LOCAL idle movement near the current cursor — a human at rest doesn't
+        fling the cursor across the page. Occasionally a short hop toward a NEARBY visible
+        element; otherwise a gentle ±px nudge. Always clamped on-screen."""
+        cx, cy = self._cursor()
+        vp = self._viewport()
+        near = [t for t in self._targets()
+                if abs(t["x"] + t["width"] / 2 - cx) < 350 and abs(t["y"] + t["height"] / 2 - cy) < 350]
+        if near and self._rng.random() < 0.35:            # occasional nearby purposeful hop
+            x, y = self._point_in(self._rng.choice(near))
+        else:                                             # small local nudge
+            x, y = cx + self._rng.uniform(-90, 90), cy + self._rng.uniform(-70, 70)
+        self._trace_to(min(max(x, 2), vp["width"] - 2), min(max(y, 2), vp["height"] - 2))
+
+    def idle(self, ms: float) -> None:
+        """Fill a wait — above all the LLM round-trip between agent actions — with human
+        idle behavior instead of a FROZEN cursor. A cursor that sits dead-still for seconds
+        every time the brain thinks is the loudest agent-body tell, and it's *inherent* to
+        the agent loop (observe → LLM thinks → act). Paced by the persona. Call this instead
+        of `time.sleep` around an LLM call."""
+        spent, scale = 0.0, self.persona.base_ms / 135.0
+        while spent < ms:
+            pause = min(self._rng.uniform(700, 2200) * scale, ms - spent)
+            if pause <= 0:
+                break
+            time.sleep(pause / 1000.0)                 # mostly STILL…
+            spent += pause
+            if spent < ms and self._rng.random() < 0.5:   # …with an occasional small drift
+                self.drift()
+
+    def click(self, target) -> None:
+        """Move to an interior point (Camoufox humanizes the PATH), settle, then press with
+        a human hold — never a teleport-click, never dead-center."""
+        loc = self._locate(target)
+        try:
+            box = loc.bounding_box()
+        except Exception:
+            box = None
+        if not box:                                   # not visible/measurable → brief fallback, no 30s hang
+            try:
+                loc.click(timeout=3000)
+            except Exception:
+                pass
+            return
+        x, y = self._point_in(box)
+        self._trace_to(x, y)                          # our persona-generated trajectory
+        time.sleep(self.mouse.settle_ms / 1000.0)
         self.page.mouse.down()
         time.sleep(self._rng.uniform(0.05, 0.11))     # click hold (down→up dwell)
         self.page.mouse.up()
