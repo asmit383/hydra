@@ -57,7 +57,7 @@ you script it directly — same object, no LLM required.
 ```python
 from hydra import Hydra
 
-with Hydra(proxies="proxies.txt", seed=7) as h:   # persistent session, humanize=OFF, one persona
+with Hydra(proxies="proxies.txt", seed=7) as h:   # persistent session, one persona per session
     result = h.capture("https://example.com")      # stealth + discover + self-heal, all handled
     for c in result.candidates:                    # the discovered endpoints (ranked biggest-first)
         print(c.method, c.status, c.shape, c.url)
@@ -65,8 +65,8 @@ with Hydra(proxies="proxies.txt", seed=7) as h:   # persistent session, humanize
 
 **Baked-in rules (not configurable):** one persona per session (from real data) · persona +
 fingerprint + session travel together (a `relaunch` mints a new identity, hot levers keep it)
-· **behavior is always ours** (`humanize=OFF`, no "be less stealthy" knob — raw `h.page` is
-the only escape hatch).
+· **behavior is always ours** — the humanized engine drives every mouse move, keystroke, and
+scroll (no "be less stealthy" knob; raw `h.page` is the only escape hatch).
 
 ### 1 · Discover an internal API + replay it (warm-session)
 ```python
@@ -155,9 +155,9 @@ with Hydra(seed=7) as h:
 
 ## The behavioral engine — humanized, from real data
 
-Camoufox spoofs the fingerprint (the body *at rest*). Hydra owns the body *in motion* — and
-turns Camoufox's `humanize` **off**, because it's one algorithm (every agent moves identically
-= a fleet signature). Instead:
+Camoufox spoofs the fingerprint (the body *at rest*). Hydra owns the body *in motion*, and
+generates it **per session** — so 10,000 agents don't share one movement algorithm (identical
+motion across a fleet is itself a signature):
 
 - **Keystroke** — a 3-level model (digraph-pair latency, per-bigram individuality,
   Ornstein-Uhlenbeck tempo drift), log-normal timing, boundary pauses, dwell, and
