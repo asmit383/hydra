@@ -9,7 +9,8 @@ class FakeSession:
         self.page = object()
         self.levers = []
 
-    def open(self):
+    def open(self, on_proxy=False):
+        self.started_on_proxy = on_proxy
         return self
 
     def close(self):

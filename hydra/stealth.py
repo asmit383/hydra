@@ -135,7 +135,8 @@ def resilient_capture(url: str, *, proxies_file: str | None = None,
             att.move = "fingerprint → relaunch (new fp + session)"
 
     # ONE persistent session held across attempts — the levers mutate it in place.
-    session = HealSession(exits, headless=headless, storage_state=storage_state).open()
+    session = HealSession(exits, headless=headless, storage_state=storage_state).open(
+        on_proxy=(start == "proxy" and bool(exits)))     # honor --proxy file/explicit (was dead)
     attempts: list[Attempt] = []
     last = None                                # best UNblocked result, for the final report
     last_any = None                            # most recent result even if blocked — for the trace

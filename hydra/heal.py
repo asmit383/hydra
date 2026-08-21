@@ -44,8 +44,19 @@ class HealSession:
         self.page = None
 
     # ---- lifecycle -----------------------------------------------------------
-    def open(self) -> "HealSession":
-        self._launch(proxy=None, geo=None)  # NATIVE first — the patient default (§thesis)
+    def open(self, on_proxy: bool = False) -> "HealSession":
+        """Open the session. Native-first by default (the patient thesis); `on_proxy=True`
+        starts DIRECTLY on a proxy exit — required for geo-locked sites where native can
+        never clear (e.g. an Italy-locked book from a non-IT IP)."""
+        if on_proxy and self.exits:
+            self._i = 0                                  # start on the first exit, via the relay
+            host, port, user, pw = _exit_parts(self.exits[0])
+            self.relay = Relay()
+            self.relay.set_upstream(host, port, user, pw)
+            self.relay.start()
+            self._launch({"server": self.relay.server_url()}, host)   # geoip aligns to the exit
+        else:
+            self._launch(proxy=None, geo=None)           # NATIVE first — the patient default
         return self
 
     def _launch(self, proxy, geo) -> None:
