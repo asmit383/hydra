@@ -2,8 +2,9 @@
 
 # 🐍 Hydra
 
-**A stealth-automation primitive on Camoufox — auto-discovers a site's internal
-data (API or server-rendered) and self-heals when detection breaks.**
+**A stealth automation *body* for AI agents (and scripts) on Camoufox — it beats antibot,
+discovers a site's internal API, drives the page with humanized behavior, and self-heals
+when detection breaks.**
 
 *Cut off a head, two grow back.*
 
@@ -11,205 +12,221 @@ data (API or server-rendered) and self-heals when detection breaks.**
 
 ![Hydra humanized cursor movement](assets/movement.gif)
 
-<sub>Hydra's cursor — real Camoufox humanize, driven by a mostly-direct human approach:
-efficient by default, occasional overshoot, never a fixed pattern.</sub>
+<sub>Hydra's cursor — a per-session persona, generated from real human-movement models,
+distinct for every agent (no two move alike).</sub>
 
 </div>
 
 ---
 
-Most web automation is brittle and static: it scrapes the fragile **DOM**, and its
-stealth is fixed — when a site's detection updates, it silently gets blocked and a
-human has to re-patch it.
+Most web automation is brittle and static: it scrapes the fragile **DOM**, drives the
+browser like a robot (instant clicks, fixed-length scrolls, no typing rhythm), and when a
+site's detection updates it silently gets blocked and a human re-patches it.
 
-Hydra goes one level deeper and closes the loop:
+Hydra is the layer that fixes all three:
 
-- **Finds the data, not the DOM.** It drives a stealth browser (Camoufox),
-  intercepts the XHR/fetch traffic, and discovers the internal JSON endpoint +
-  its auth. If there's no API (server-rendered pages), it reads the data inlined
-  in the HTML instead — including modern Next.js App Router streams.
-- **Adaptive, self-healing stealth.** When it hits a block it detects it
-  **vendor-free** — anchoring on whether it actually got the data, not on recognizing a
-  vendor — classifies *which* block it is from the response, and heals on a **live
-  session**: rotate the exit (keeping the fingerprint + warm session), drop the session,
-  wait it out, or relaunch — the cheapest fix first, instead of blindly cycling proxies.
+- **Finds the data, not the DOM.** Drives a fingerprint-hardened browser (Camoufox),
+  intercepts the XHR/fetch traffic, and discovers the internal JSON endpoint + its auth —
+  or reads SSR-inlined data / live WebSocket streams. A site's API rarely breaks on a
+  redesign; the DOM does.
+- **Moves like a human, not a bot.** Keystroke timing (digraph latency, dwell, typos +
+  corrections) modeled from a **real 136M-keystroke dataset**, and mouse trajectories
+  (velocity, curvature, tremor, overshoot) generated per-session — so **10,000 agents don't
+  all move identically** (which is itself a mass-block signal). One coherent persona per
+  session: fast typist ⇒ fast mouse.
+- **Self-heals through blocks.** Detects a block **vendor-free** (anchored on *did I get the
+  data?*, not on recognizing a brand), and heals on a **live session** with a cost-ordered
+  ladder — patience → behave → rotate exit → drop session → relaunch — cheapest fix first.
 
-It's not a scraper — it's a **resilient automation primitive** that anyone
-automating the web can build on, the way you build on Camoufox itself.
+It's not a scraper — it's a **stealth body** an AI *or* a plain script can drive.
 
 ## Install
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .            # installs the `hydra` command
+pip install -e .            # installs the `hydra` command + the `hydra` package
 python -m camoufox fetch    # one-time browser download
 ```
 
-## Quick start
+---
+
+## The SDK — `Hydra`
+
+One stateful object holds a persistent stealth session. An AI drives it (via `observe`), or
+you script it directly — same object, no LLM required.
+
+```python
+from hydra import Hydra
+
+with Hydra(proxies="proxies.txt", seed=7) as h:   # persistent session, humanize=OFF, one persona
+    result = h.capture("https://example.com")      # stealth + discover + self-heal, all handled
+    for c in result.candidates:                    # the discovered endpoints (ranked biggest-first)
+        print(c.method, c.status, c.shape, c.url)
+```
+
+**Baked-in rules (not configurable):** one persona per session (from real data) · persona +
+fingerprint + session travel together (a `relaunch` mints a new identity, hot levers keep it)
+· **behavior is always ours** (`humanize=OFF`, no "be less stealthy" knob — raw `h.page` is
+the only escape hatch).
+
+### 1 · Discover an internal API + replay it (warm-session)
+```python
+with Hydra(proxies="proxies.txt", seed=7) as h:
+    r = h.capture("https://example.com/listing")
+    endpoint = r.candidates[0]                     # ranked biggest-first
+    data = h.fetch(endpoint)                        # replay it IN-SESSION (carries the clearance cookie)
+    print(data["status"], data.get("json"))
+```
+`fetch()` replays **GET, POST, and GraphQL** — it sends the captured method, POST body, and
+header-auth (bearer / api-key), while `credentials:'include'` carries the browser-minted
+clearance cookie a plain `httpx` call can't.
+
+### 2 · Drive the page with humanized behavior (no AI)
+```python
+with Hydra(seed=7) as h:
+    h.navigate("https://example.com/login")
+    h.type("#email", "me@example.com")             # per-keystroke timing, occasional typo+correction
+    h.type("#password", "hunter2", secret=True)    # secret → no typos in a password field
+    h.click("button[type=submit]")                 # curved, variable-speed mouse (never a teleport)
+    h.scroll(steps=4)                              # variable-distance, persona-paced
+    r = h.capture("https://example.com/dashboard")
+```
+Every action goes through the behavioral engine — keystroke, mouse, scroll, and idle are one
+coherent persona. Never uses `fill()` (which fires zero keystroke events = an instant flag).
+
+### 3 · Interaction-gated data + context capture
+Some data only fires *after* a click (a market tab, a sport switch, opening a match). `open()`
++ `act()` capture the APIs an action **triggers**, tagged with the action that revealed them.
+```python
+with Hydra(proxies="proxies.txt", seed=7) as h:
+    h.open("https://example.com")                  # capture on-load APIs (tagged "load")
+    h.act("#tab-details", label="open details")    # click → capture what THAT fires
+    for c in h.context:
+        print(c["fired_on"], "→", c["url"])         # e.g. "open details → /api/getDetails"
+```
+
+### 4 · Let an AI decide (optional) — the action space
+`observe()` turns the DOM into a small, labeled, **spatial** menu (visible elements only, each
+with `box=[x,y,w,h]` to disambiguate duplicates, a stable id, and an `oauth` trap flag). The AI
+reads it, picks an `id`, and the SDK acts on it — humanized.
+```python
+with Hydra(seed=7) as h:
+    h.navigate("https://example.com")
+    actions = h.observe()
+    # → [{"id":1,"kind":"a","label":"Tennis","box":[110,140,54,41],"oauth":false}, ...]
+    # your LLM picks id 1 given the goal, then:
+    h.click(1)                                      # act by observe() id
+```
+> The AI is an **optional** consumer of `observe()`. Everything else — `navigate`, `capture`,
+> `type`, `click`, `scroll`, `fetch` — is deterministic and callable directly, no LLM.
+
+### 5 · Behind a login
+Log in once by hand, then reuse the saved session:
 ```bash
-hydra capture https://example.com            # JSON of the discovered endpoints → stdout
-hydra capture https://example.com > api.json # progress goes to stderr, so this stays clean JSON
-hydra capture https://example.com --pretty   # colored, boxed human view instead
+hydra login https://example.com/login --state s.json   # a browser opens; log in, press Enter
 ```
-Output is **JSON by default** — a clean array of the discovered endpoints
-(`method`, `url`, `status`, `size`, `shape`, `auth`, `sample`) — so you can pipe
-it to `jq`, save it, or feed a replay. `--pretty` gives a colored boxed view.
-
-`capture` **self-heals by default** — it starts on your own IP, and only if it
-diagnoses a block does it escalate (wait the challenge out → fresh fingerprint →
-rotate to a proxy). It stays quiet when nothing's wrong, and narrates (on stderr)
-when it fights.
-
-## What it finds
-
-A site can ship its data four ways. Hydra covers all four:
-
-| how the site serves data | Hydra's mechanism |
-|---|---|
-| **API on load** | intercepts the XHR/fetch response |
-| **API on interaction** (infinite scroll, pagination) | a scroll pass triggers it, then intercepts |
-| **SSR** — inlined in the HTML (`__NEXT_DATA__`, Apollo, `ld+json`) | extracts the blob, points at the biggest record set |
-| **Next.js App Router** — React Server Component streams (`__next_f`) | reassembles the stream and harvests the records |
-| **live streams** — WebSocket / SSE (live odds, tickers) | captures the URL, subscribe frames, and a data sample |
-
-Example — an infinite-scroll site, where the data only loads as you scroll:
+```python
+with Hydra(state="s.json", seed=7) as h:
+    r = h.capture("https://example.com/account")
 ```
-$ hydra capture https://quotes.toscrape.com/scroll
-[
-  {
-    "method": "GET",
-    "url": "https://quotes.toscrape.com/api/quotes?page=2",
-    "status": 200, "size": 4793, "shape": "dict(5 keys)", "auth": [],
-    "sample": { "has_next": true, "page": 2, "quotes": [ ... ] }
-  },
-  ...
-]
-```
-Trackers, analytics, fonts, consent/CMP config, and payment SDKs are filtered out
-automatically. Each API candidate is captured **with its request + auth headers**,
-so it can be replayed.
+The session file holds cookies + tokens — Hydra writes it `chmod 600` and gitignores the
+common names. Keep it secret.
 
-It also **doesn't trust `content-type`** — JSON served as `text/plain` or
-`text/html` (common on legacy Java/PHP/enterprise backends) is captured too, not
-silently dropped.
+### 6 · Proxies
+```python
+Hydra(proxies="proxies.txt")                 # rotate through a file (ip:port:user:pass per line)
+Hydra(proxy="ip:port:user:pass")             # one explicit exit
+Hydra()                                       # native IP (no proxy)
+```
+Geoip is auto-aligned to the exit (timezone/locale match where the traffic appears from). Give
+it a proxy and the session **starts on the exit** — required for geo-locked sites.
+
+### 7 · The escape hatch
+Need raw control? `h.page` is the live Playwright page.
+```python
+with Hydra(seed=7) as h:
+    h.navigate("https://example.com")
+    h.page.evaluate("() => document.title")
+```
+
+**Object surface:** `navigate` · `capture` · `open` · `act` · `observe` · `type` / `click` /
+`move_to` / `idle` / `scroll` · `fetch` · properties `page` / `persona` / `exit` / `context`.
+
+---
+
+## The behavioral engine — humanized, from real data
+
+Camoufox spoofs the fingerprint (the body *at rest*). Hydra owns the body *in motion* — and
+turns Camoufox's `humanize` **off**, because it's one algorithm (every agent moves identically
+= a fleet signature). Instead:
+
+- **Keystroke** — a 3-level model (digraph-pair latency, per-bigram individuality,
+  Ornstein-Uhlenbeck tempo drift), log-normal timing, boundary pauses, dwell, and
+  typo→backspace→retype. Parameters **measured** from the Aalto *136M keystrokes* dataset.
+- **Mouse (MouseForge)** — per-session trajectory: dense sampling, ease-in-out velocity, a
+  sine-arc bow, small tremor, overshoot-and-correct. **5,000 sessions → 5,000 distinct paths.**
+- **Coherence** — one persona drives typing *and* mouse *and* scroll *and* idle; a slow typist
+  is slow everywhere. `h.idle(ms)` even keeps the cursor alive during LLM think-time (a frozen
+  cursor between agent actions is the loudest agent tell).
+
+Honest edge: the mouse is built on real *motor-science models* (minimum-jerk, Fitts, tremor)
+with parameters not yet calibrated to a mouse dataset — structurally human, not yet
+measured-human. Keystroke is measured.
 
 ## Self-healing through blocks
 
-`capture` heals automatically. It detects a block **vendor-free** — anchoring on the
-one signal an adversary can't fake (*did I get the data?*), then reading the response
-(status, headers, clearance cookies, challenge shape) to classify *which* block it is
-— and maps it to the cheapest lever on a **persistent session**:
+Detected **vendor-free** — the one signal an adversary can't fake is *did I get the data?* —
+then mapped to the cheapest lever on a **live session**, escalating down the ladder if a block
+recurs:
 
 | detected block | lever | keeps |
 |---|---|---|
-| transient JS challenge | **patience** — wait it out | fingerprint + session |
-| rate-limit / IP | **rotate exit** (swappable relay) | fingerprint + session |
-| session / quota | **drop session** — clear cookies | fingerprint |
-| fingerprint | **relaunch** — new identity (last resort) | — |
+| transient JS challenge | **patience** — wait it out | fp + session + IP |
+| behavioral flag | **behave** — humanized activity on the live session | fp + session + IP |
+| rate-limit / IP | **rotate exit** (hot relay swap) | fp + session |
+| session / quota | **drop session** (clear cookies) | fp + IP |
+| fingerprint | **relaunch** (new identity, last resort) | — |
 | auth / hard captcha | **stop** — needs a human | — |
-| no API (SSR) | not a block — just parse the page | — |
 
-The ladder is **patience-first**, and rotation is *hot*: a local relay swaps the exit IP
-**without relaunching**, so the warm clearance cookie survives. Blindly rotating a proxy
-often makes a fingerprint challenge *worse* — a clean native IP + a fresh fingerprint
-often beats a flagged proxy.
+Cost-ordered: touch the fingerprint *last* (it's the only lever that burns the warm clearance
+you fought to earn).
 
-**Watch it react to each block on command** (a local simulator mints each block class —
-real antibot blocks are probabilistic, so this is the only way to demo every lever):
-```bash
-python examples/blocksim.py --ip          # 403 → rotate exit
-python examples/blocksim.py --session      # 412 → drop session, keep fingerprint
-python examples/blocksim.py --transient     # "Just a moment" → patience, same session
-python examples/blocksim.py --auth          # → stops cleanly (needs a human)
-python examples/blocksim.py                 # unclassifiable block → cost-ladder fallback
-```
-`examples/relay_rotate.py` proves the hot rotation end-to-end: the exit IP changes while
-the fingerprint *and* the session cookie are preserved. `hydra heal <url>` prints the
-full per-attempt trace for a single URL.
+## What it discovers
 
-## Proxies
-
-Point Hydra at a proxy file or a single proxy — the mode is **inferred**, so you
-don't pass `--proxy` yourself:
-
-```bash
-hydra capture <url>                                # native IP, escalate to proxies only if blocked
-hydra capture <url> --proxies-file p.txt           # rotate through a proxy file (any name)
-hydra capture <url> --proxy-str ip:port:user:pass  # one explicit proxy
-hydra capture <url> --proxy native                 # force native only (no proxy)
-```
-A proxy file is one `ip:port:user:pass` (or `ip:port`) per line; `--proxies-file`
-defaults to `./proxies.txt` (or `$PROXIES_FILE`). Geoip is auto-aligned to the
-proxy's exit IP so timezone/locale match where the traffic appears to come from.
-
-If you **ask** for a proxy (`--proxies-file` / `--proxy-str` / `--proxy file`) but
-none loads, Hydra **aborts** rather than falling back to your native IP — so a
-missing proxy file can't accidentally hit a geo-locked site from your real IP.
-
-> Proxy files hold credentials — keep them out of the repo. The default
-> `proxies.txt` / `proxies*.txt` are gitignored; a custom name is **not**, so add
-> it to `.gitignore` if you name it something else.
-
-## Geo-gated / thin results
-
-A wrong-country exit often returns a **200 that's thin** — the page renders but
-withholds the real data. That's not a *block*, so self-heal won't fire on its own.
-Tell Hydra what "good" looks like and it rotates exits until it gets there:
-
-```bash
-hydra capture <url> --proxies-file p.txt --min-endpoints 5    # until ≥5 endpoints fire
-hydra capture <url> --proxies-file p.txt --expect /api/items  # until an endpoint URL matches
-```
-`--min-endpoints` needs no endpoint name (use it during discovery); `--expect`
-targets a known endpoint. Pair with `--attempts N` to bound the hunt.
-
-## From capture to a runnable client — `hydra gen`
-
-Turn a discovery into a standalone, browser-free scraper:
-```bash
-hydra gen <url> --endpoint /api/items --out client.py
-python client.py            # fetches the data with httpx — no browser
-```
-It emits one `httpx` function per discovered endpoint with the captured auth
-(cookies / bearer / api-key) embedded, so it works immediately. The file holds
-credentials — it's written `chmod 600`; re-run `hydra gen` when the auth expires.
-
-## Behind a login
-
-Data behind an auth wall is invisible to a logged-out browser. Log in once by
-hand, then capture with the saved session:
-```bash
-hydra login https://site.com/login --state s.json     # a browser opens; log in, press Enter
-hydra capture https://site.com/dashboard --state s.json
-```
-The session file holds cookies + tokens — it's a **credential**. Hydra writes it
-`chmod 600` and gitignores the common names; keep it secret.
-
-## Options (capture)
-| flag | what |
+| how the site serves data | Hydra's mechanism |
 |---|---|
-| `--proxies-file PATH` | rotate through a proxy file (implies proxy mode) |
-| `--proxy-str ip:port:user:pass` | one explicit proxy (implies proxy mode) |
-| `--proxy auto\|native\|file\|explicit` | force a mode (default `auto`: native, escalate if blocked) |
-| `--min-endpoints N` / `--expect SUBSTR` | rotate exits until the result is rich / a wanted endpoint fires |
-| `--attempts N` / `--no-heal` | max self-heal attempts / single-shot |
-| `--no-interact` / `--scrolls N` | skip or tune the scroll pass |
-| `--state PATH` | capture with a saved login session (`hydra login`) |
-| `--pretty` | colored boxed view instead of the default JSON |
-| `--headful` | show the browser window |
+| **API on load** | intercepts the XHR/fetch response (any content-type, incl. JSON-as-text/plain) |
+| **API on interaction** | a humanized scroll/click pass triggers it, then intercepts |
+| **API on a click** (`act`) | tags the endpoint with the action that fired it |
+| **POST / GraphQL** | kept as distinct operations (dedup by url **+** body), replayable via `fetch` |
+| **SSR** — `__NEXT_DATA__` / Apollo / `ld+json` | extracts the blob, points at the biggest record set |
+| **Next.js App Router** (RSC `__next_f`) | reassembles the stream, harvests records |
+| **live streams** — WebSocket / SSE | captures the URL, subscribe frames, a data sample |
+
+Trackers, analytics, fonts, consent/CMP, payment SDKs are filtered out automatically.
+
+## CLI
+
+The SDK is the main interface, but a CLI wraps it for quick one-offs:
+```bash
+hydra capture https://example.com              # JSON of discovered endpoints → stdout
+hydra capture https://example.com --pretty     # colored boxed view
+hydra capture https://example.com --proxy file --proxies-file proxies.txt   # via a proxy exit
+hydra login https://example.com/login --state s.json                        # save a session
+hydra gen https://example.com --endpoint /api/items --out client.py         # codegen a client
+```
 
 ## Status
-🚧 Early, but the core works: discovery (API on load/scroll + SSR + RSC, any
-content-type, **plus WebSocket/SSE live streams**), **vendor-free block detection**
-(oracle-anchored, keyed on the response not the brand), **session-preserving self-heal**
-(a persistent session + hot exit rotation via a relay that keeps fingerprint + clearance),
-proxies with geo-gated retry, authenticated capture, and **`hydra gen`** (browser-free
-client codegen). Honest edges: the self-heal's *mechanisms* are proven (see the demos)
-but its live-recovery rate on real hard blocks is unvalidated — real blocks are
-probabilistic. Not yet covered: **WS replay** (capture works, codegen doesn't),
-typed-search, click-gated data, and the SDK/MCP layer — see `phases.md`.
 
-Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint
-spoofing. Hydra is the *adaptive* layer above it.
+🚧 Early, but the core works and is **proven on live, hard targets** (it pulls data off
+Cloudflare/Akamai-gated sites). Built: the `Hydra` SDK, vendor-free detection, session-
+preserving self-heal, data-backed humanized keystroke + MouseForge, discovery
+(API/SSR/RSC/WebSocket, POST/GraphQL), context capture, `observe`, warm-session replay.
+Honest edges: the self-heal's live-recovery rate on the hardest probabilistic blocks is
+unvalidated; the mouse isn't dataset-calibrated yet; the amortization store (discover-once →
+replay-forever) and the MCP/agent layer are designed, not built. See `phases.md`.
 
-> Use responsibly: capture your own data or genuinely public data, and respect
-> each site's terms and rate limits.
+Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint spoofing.
+Hydra is the *adaptive, behavioral* layer above it.
+
+> Use responsibly: capture your own data or genuinely public data, respect each site's terms
+> and rate limits.
