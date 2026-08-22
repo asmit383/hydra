@@ -113,3 +113,62 @@ def test_replay_forwards_auth_but_not_browser_headers():
     assert set(fwd) == {"Authorization", "Content-Type", "X-Api-Key"}   # auth + content-type
     # cookies (credentials:'include') + browser-managed headers are NOT forwarded
     assert not any(k.lower() in ("cookie", "host", "origin", "sec-fetch-mode", "user-agent") for k in fwd)
+
+
+# ── perception core v2: ranking + blocker detection (browser-free, synthetic records) ─
+def _rec(id, label="", role="button", verb=None, overlay="", inVp=True, occ=False, box=(0, 0, 40, 20)):
+    return {"id": id, "label": label, "role": role, "verb": verb, "overlayText": overlay,
+            "oauth": False, "inVp": inVp, "occ": occ, "box": list(box)}
+
+
+def test_rank_drops_occluded_elements():
+    from hydra.sdk import _rank
+    out = _rank([_rec(1, "A"), _rec(2, "B", occ=True)], 1000, 800)
+    assert [e["id"] for e in out] == [1]               # covered element is not clickable → dropped
+
+
+def test_rank_in_viewport_filter():
+    from hydra.sdk import _rank
+    out = _rank([_rec(1, "A", inVp=True), _rec(2, "B", inVp=False)], 1000, 800, in_viewport=True)
+    assert [e["id"] for e in out] == [1]
+
+
+def test_rank_dedups_twins_and_keeps_the_onscreen_one():
+    from hydra.sdk import _rank
+    recs = [_rec(1, "Menu", inVp=False, box=(0, 0, 50, 20)),
+            _rec(2, "Menu", inVp=True, box=(0, 0, 50, 20))]   # identical label/role/size = twin
+    out = _rank(recs, 1000, 800)
+    assert len(out) == 1 and out[0]["id"] == 2         # collapsed; kept the on-screen twin
+
+
+def test_rank_floats_blockers_then_viewport_over_offscreen():
+    from hydra.sdk import _rank
+    recs = [_rec(1, "content", role="link", inVp=False, box=(0, 3000, 100, 20)),
+            _rec(2, "Chiudi", role="dismiss", verb="close", overlay="popup", box=(470, 390, 60, 20)),
+            _rec(3, "nav", role="link", inVp=True, box=(0, 0, 40, 20))]
+    ids = [e["id"] for e in _rank(recs, 1000, 800)]
+    assert ids[0] == 2                                 # a blocker outranks everything
+    assert ids.index(3) < ids.index(1)                 # on-screen outranks off-screen
+
+
+def test_rank_role_and_contains_filters():
+    from hydra.sdk import _rank
+    recs = [_rec(1, "Calcio", role="link"), _rec(2, "Tennis", role="link"), _rec(3, "go", role="button")]
+    assert [e["id"] for e in _rank(recs, 1000, 800, contains="cal")] == [1]
+    assert [e["id"] for e in _rank(recs, 1000, 800, role="button")] == [3]
+
+
+def test_pick_blockers_accept_first_one_per_overlay():
+    from hydra.sdk import _pick_blockers
+    recs = [_rec(1, "Accetta tutti", role="dismiss", verb="accept", overlay="cookie privacy"),
+            _rec(2, "Rifiuta", role="dismiss", verb="reject", overlay="cookie privacy"),
+            _rec(3, "Chiudi", role="dismiss", verb="close", overlay="Ehi Sisal popup")]
+    bl = _pick_blockers(recs)
+    assert [b["id"] for b in bl] == [1, 3]             # accept wins its overlay; one per overlay; accept-first
+
+
+def test_pick_blockers_ignores_non_blockers_and_occluded():
+    from hydra.sdk import _pick_blockers
+    recs = [_rec(1, "login", verb=None),
+            _rec(2, "Chiudi", verb="close", overlay="x", occ=True)]
+    assert _pick_blockers(recs) == []
