@@ -161,6 +161,39 @@ with Hydra(seed=7) as h:
 
 ---
 
+## Driving it with an LLM — two ways
+
+The SDK is generic: it *maps* the page and *acts*, with no site or language knowledge. The
+judgment — *which* element is a real match vs a nav link vs a pools game — is the LLM's. Two ways
+to supply it:
+
+**1 · In-process (`hydra.pilot`)** — an injectable decision loop. `pip install "hydra[llm]"` + an
+`ANTHROPIC_API_KEY`:
+```python
+from hydra import Hydra
+from hydra.pilot import pilot, claude_decider
+
+with Hydra(proxies="proxies.txt") as h:
+    h.open("https://example.com")
+    pilot(h, "open a product and load its price API", claude_decider(), max_steps=14)
+    for e in h.context: print(e["fired_on"], e["url"])
+```
+The decider is pluggable (`state → {action,id,why}`), so the loop is testable without a key and
+model-agnostic. `snapshot()` carries no headers/tokens — nothing sensitive reaches the model.
+
+**2 · As an MCP server (`hydra.mcp_server`)** — expose Hydra as tools so *any* MCP client (Claude
+Code, etc.) drives a persistent session; the client is the brain (no separate API cost).
+`pip install "hydra[mcp]"`, then register it:
+```bash
+claude mcp add hydra -- /path/to/hydra/.venv/bin/python -m hydra.mcp_server
+```
+Tools: `open_page` · `snapshot` · `click` · `scroll` · `type_text` · `endpoints` · `fetch` ·
+`reset`. Results are **stripped of auth** — the model sees `url/method/status/shape/size/auth-tag`,
+never the cookies or tokens (those stay server-side; `fetch` replays with them and returns only
+the data).
+
+---
+
 ## The behavioral engine — humanized, from real data
 
 Camoufox spoofs the fingerprint (the body *at rest*). Hydra owns the body *in motion*, and

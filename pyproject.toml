@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+mcp = ["mcp", "python-dotenv"]          # hydra.mcp_server — drive from an MCP client
+llm = ["anthropic", "python-dotenv"]    # hydra.pilot.claude_decider — LLM decision loop
 
 [project.urls]
 Homepage = "https://github.com/asmit383/hydra"

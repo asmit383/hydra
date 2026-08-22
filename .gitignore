@@ -25,3 +25,6 @@ data/
 
 # local-only demo scripts (not for publish)
 examples/sisal_odds.py
+
+# machine-specific MCP registration (absolute venv path)
+.mcp.json
