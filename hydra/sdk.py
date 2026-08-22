@@ -69,31 +69,34 @@ def _make_persona(seed, corpus_path):
         return sample_persona(seed)
 
 
-# ── perception core (v2) ────────────────────────────────────────────────────────
-# One DOM pass → a rich element model. Two consumers project from it: the SDK (rich,
-# filterable dicts via observe()) and the MCP layer (token-lean snapshot()). Ranks by
-# relevance (never truncates by DOM order), sees real on-screen state (viewport +
-# occlusion), dedups, and flags BLOCKERS (consent bars / popups) with the verb to clear
-# them — size-independent, because real ones aren't role=dialog (measured on Sisal).
+# ── perception core ─────────────────────────────────────────────────────────────
+# observe() MAPS the page — nothing site- or language-specific. One DOM pass reads every
+# interactive element's OWN label + geometry + a purely STRUCTURAL `overlay` flag (is it inside
+# a dialog / aria-modal / floating high-z layer). No keyword lists, no "accept/close" guessing,
+# no brand matching: the SDK gives the map, the AGENT reads the labels (any language) and decides
+# what to click and in what order. `data-hydra-id` is stable across passes so a scan (scroll +
+# re-map) extends ONE consistent map of the whole page. Two projections: observe() (rich, for the
+# SDK) and snapshot() (token-lean, for the MCP) — same ids/coords, so a pick maps 1:1 to an action.
 _PERCEIVE_JS = r"""() => {
-  const vw = innerWidth, vh = innerHeight;
-  const ACCEPT = /accetta|acconsent|consenti|ho capito|allow all|accept all|accept/i;
-  const CLOSE  = /chiudi|^\s*[×✕✖xX]\s*$|close|no,? grazie|salta|dismiss|not now/i;
-  const REJECT = /rifiuta|reject|nega|decline/i;
-  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-  const fixedRoot = (el) => {                       // nearest overlay-ish ancestor, any size
-    let n = el, hop = 0;
+  const vw = innerWidth, vh = innerHeight, sy = scrollY;
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const overlayRoot = (el) => {                     // STRUCTURAL, keyword-free: dialog / modal /
+    let n = el, hop = 0;                            // floating high-z layer (not a sticky header)
     while (n && hop++ < 12) {
+      if (n.getAttribute) {
+        const role = n.getAttribute('role');
+        if (role === 'dialog' || role === 'alertdialog' ||
+            n.getAttribute('aria-modal') === 'true' || n.tagName === 'DIALOG') return n;
+      }
       const c = getComputedStyle(n);
-      if (c.position === 'fixed' || c.position === 'sticky' ||
-          (c.position === 'absolute' && (parseInt(c.zIndex) || 0) >= 1000) ||
-          (n.getAttribute && n.getAttribute('role') === 'dialog')) return n;
+      if ((c.position === 'fixed' || c.position === 'absolute') &&
+          (parseInt(c.zIndex) || 0) >= 1000) return n;
       n = n.parentElement;
     }
     return null;
   };
   const els = [...document.querySelectorAll('a,button,input,select,textarea,[role=button]')];
-  const out = []; let id = 0;
+  const out = [];
   for (const el of els) {
     const r = el.getBoundingClientRect();
     if (r.width < 2 || r.height < 2 || !el.offsetParent) continue;   // real size + laid out
@@ -107,37 +110,31 @@ _PERCEIVE_JS = r"""() => {
       const t = document.elementFromPoint(cx, cy);
       occ = !(t && (t === el || el.contains(t) || t.contains(el)));
     }
-    el.setAttribute('data-hydra-id', String(++id));
+    if (!el.hasAttribute('data-hydra-id'))           // stable id — survives scroll re-maps
+      el.setAttribute('data-hydra-id', String(window.__hid = (window.__hid || 0) + 1));
+    const id = parseInt(el.getAttribute('data-hydra-id'), 10);
     let label = clean(el.getAttribute('aria-label') || el.innerText || el.value ||
-                      el.placeholder || el.title || el.name || el.alt);
+                      el.placeholder || el.title || el.name || el.alt).slice(0, 60);
     if (!label) { const s = el.querySelector && el.querySelector('title');   // icon-only fallback
-                  label = clean(s && s.textContent); }
-    let verb = null, overlayText = '';
-    if (ACCEPT.test(label) || CLOSE.test(label) || REJECT.test(label)) {
-      const fr = fixedRoot(el);                      // a dismiss-ish label INSIDE an overlay = blocker
-      if (fr) { overlayText = clean(fr.innerText).slice(0, 80);
-                verb = ACCEPT.test(label) ? 'accept' : (REJECT.test(label) ? 'reject' : 'close'); }
-    }
+                  label = clean(s && s.textContent).slice(0, 60); }
     const tag = el.tagName.toLowerCase();
-    const role = verb ? 'dismiss'
-      : (tag === 'input' || tag === 'select' || tag === 'textarea') ? 'field'
+    const role = (tag === 'input' || tag === 'select' || tag === 'textarea') ? 'field'
       : (el.getAttribute('role') === 'tab') ? 'tab'
       : (tag === 'a') ? 'link' : 'button';
-    const oauth = /google|apple|facebook|microsoft|github|\bsso\b/i.test(label);
-    out.push({id, tag, type: el.type || null, label, role, verb, overlayText, oauth,
+    out.push({id, tag, type: el.type || null, label, role, overlay: !!overlayRoot(el),
               inVp, occ, box: [Math.round(r.x), Math.round(r.y),
-                               Math.round(r.width), Math.round(r.height)]});
+                               Math.round(r.width), Math.round(r.height)],
+              pageY: Math.round(r.y + sy)});
   }
-  return {vw, vh, scrollY: Math.round(scrollY),
+  return {vw, vh, scrollY: Math.round(sy),
           scrollHeight: document.documentElement.scrollHeight, els: out};
 }"""
 
-_VERB_PREC = {"accept": 0, "close": 1, "reject": 2}   # clear consent (accept) before popups
 
-
-def _rank(recs, vw, vh, *, in_viewport=None, role=None, contains=None, limit=60):
-    """Dedup + filter + RANK the raw perception records by relevance (blocker > on-screen-center
-    > labeled > content), then take the top `limit`. Pure — takes records, returns records."""
+def _rank(recs, vw, vh, *, in_viewport=None, role=None, contains=None, overlay=None, limit=60):
+    """Dedup + filter + RANK the raw perception records by relevance (on-screen-center > labeled >
+    content), then take the top `limit`. Pure — records in, records out. No site knowledge; the
+    agent decides what matters. Filters: role / contains (label substring) / in_viewport / overlay."""
     cx0, cy0 = vw / 2, vh / 2
     diag = max(1.0, (vw * vw + vh * vh) ** 0.5)
     best, order = {}, []
@@ -145,6 +142,8 @@ def _rank(recs, vw, vh, *, in_viewport=None, role=None, contains=None, limit=60)
         if e.get("occ"):                                   # covered → not actually clickable
             continue
         if in_viewport and not e["inVp"]:
+            continue
+        if overlay is not None and bool(e.get("overlay")) != overlay:
             continue
         if role and e["role"] != role:
             continue
@@ -163,9 +162,7 @@ def _rank(recs, vw, vh, *, in_viewport=None, role=None, contains=None, limit=60)
 
     def score(e):
         x, y, w, h = e["box"]
-        s = 100.0 if e.get("verb") else 0.0                # a blocker to clear = top priority
-        if e["inVp"]:
-            s += 5
+        s = 5.0 if e["inVp"] else 0.0
         dist = (((x + w / 2) - cx0) ** 2 + ((y + h / 2) - cy0) ** 2) ** 0.5
         s += 2 * max(0.0, 1 - dist / diag)                 # centrality 0..2
         if e["label"]:
@@ -175,19 +172,6 @@ def _rank(recs, vw, vh, *, in_viewport=None, role=None, contains=None, limit=60)
         return -s
     order.sort(key=score)
     return order[:limit]
-
-
-def _pick_blockers(recs):
-    """The controls that gate the page — one per overlay, preferring ACCEPT (a consent bar's
-    accept also mints the cookie the API needs) > CLOSE > REJECT. Ordered accept-first."""
-    best = {}
-    for e in recs:
-        if not e.get("verb") or e.get("occ"):
-            continue
-        k = e["overlayText"] or e["label"]
-        if k not in best or _VERB_PREC[e["verb"]] < _VERB_PREC[best[k]["verb"]]:
-            best[k] = e
-    return sorted(best.values(), key=lambda e: _VERB_PREC[e["verb"]])
 
 
 class Hydra:
@@ -412,57 +396,59 @@ class Hydra:
             }""", [url, method, body, headers])
 
     # ── AI action space (OPTIONAL — only when the caller doesn't know the flow) ─
-    def observe(self, *, role=None, contains=None, in_viewport=None, limit=60):
-        """The eyes (v2). RANKED, deduped interactive elements — each with WHAT it is
-        (`label`/`role`), WHERE it is (`box=[x,y,w,h]` + `inVp`), whether it's actually
-        clickable (occluded ones dropped), a `verb` if it's a blocker (accept/close/reject),
-        an `oauth` trap flag, and a stable `data-hydra-id` to act on (`h.click(id)`). Ranked by
-        relevance (blocker > on-screen-center > labeled > content) — NOT truncated by DOM order.
-        Filters: `role=` ('link'/'button'/'field'/'tab'/'dismiss'), `contains=` (label
-        substring), `in_viewport=True` (only what's on screen)."""
-        m = self.session.page.evaluate(_PERCEIVE_JS)
-        return _rank(m["els"], m["vw"], m["vh"], in_viewport=in_viewport,
-                     role=role, contains=contains, limit=limit)
+    def observe(self, *, role=None, contains=None, in_viewport=None, overlay=None,
+                limit=60, scan=False):
+        """The eyes. MAPS the page — ranked, deduped interactive elements, each with WHAT it is
+        (`label`/`role`), WHERE it is (`box=[x,y,w,h]`, `pageY`, `inVp`), whether it's actually
+        clickable (occluded ones dropped), a structural `overlay` flag (inside a dialog / modal /
+        floating layer — keyword-free), and a stable `data-hydra-id` to act on (`h.click(id)`).
+        No site/language knowledge: the agent reads the labels and decides what to click and in
+        what order (incl. how to dismiss an overlay — just click its control). Ranked by relevance
+        (on-screen-center > labeled > content), NOT truncated by DOM order.
+        Filters: `role=` ('link'/'button'/'field'/'tab'), `contains=` (label substring),
+        `in_viewport=True`, `overlay=True/False`. `scan=True` scrolls the whole page and returns
+        ONE merged map (reaches content below the fold)."""
+        m = self._scan_raw() if scan else self.session.page.evaluate(_PERCEIVE_JS)
+        return _rank(m["els"], m["vw"], m["vh"], in_viewport=in_viewport, role=role,
+                     contains=contains, overlay=overlay, limit=limit)
 
-    def blockers(self):
-        """The overlays gating the page (consent bars / popups), one control per overlay with
-        the `verb` to clear it — accept-first. Empty when nothing is blocking."""
-        m = self.session.page.evaluate(_PERCEIVE_JS)
-        return _pick_blockers(m["els"])
-
-    def dismiss_blockers(self, *, max_rounds=4):
-        """Clear ALL overlays before navigating — a consent bar wants ACCEPT (it also mints the
-        cookie the odds API needs), a promo/AI popup wants CLOSE. Handles several at once by
-        clearing one, re-scanning (the DOM changes), and repeating. Returns what it dismissed."""
-        cleared = []
-        for _ in range(max_rounds):
-            bl = self.blockers()
-            if not bl:
+    def _scan_raw(self):
+        """Scroll top→bottom, re-mapping at each step, and MERGE into one whole-page record set
+        (deduped by the stable id). Lets `observe(scan=True)` reach below-the-fold content."""
+        page = self.session.page
+        page.evaluate("() => window.scrollTo(0, 0)")
+        merged, vw, vh, sh, last = {}, 0, 0, 0, -1
+        for _ in range(40):                                    # safety cap
+            m = page.evaluate(_PERCEIVE_JS)
+            vw, vh, sh = m["vw"], m["vh"], m["scrollHeight"]
+            for e in m["els"]:
+                merged[e["id"]] = e                            # later pass (in-viewport) wins
+            y = page.evaluate("() => Math.round(scrollY)")
+            if y == last or y + vh >= sh - 2:                  # no movement or hit the bottom
                 break
-            b = bl[0]                                  # accept-first ordering
-            try:
-                self.click(b["id"])
-            except Exception:
-                break
-            cleared.append(b["label"])
-            self.session.page.wait_for_timeout(900)
-        return cleared
+            last = y
+            page.evaluate("() => window.scrollBy(0, innerHeight * 0.85)")
+            page.wait_for_timeout(250)                         # let lazy content load
+        return {"vw": vw, "vh": vh, "scrollY": last if last >= 0 else 0,
+                "scrollHeight": sh, "els": list(merged.values())}
 
-    def snapshot(self, *, limit=30):
-        """The MCP projection — the SAME perception, token-lean for an LLM: what's blocking (+
-        how to clear it), whether there's more below the fold (→ scroll), and the ranked menu
-        with click points. Same ids/coords as observe(), so a model's pick maps 1:1 to an
-        action. Carries no headers/tokens — safe to hand to the model."""
-        m = self.session.page.evaluate(_PERCEIVE_JS)
+    def snapshot(self, *, limit=30, scan=False):
+        """The MCP projection — the SAME map, token-lean for an LLM: the overlays that are up
+        (so the agent clears them first — it reads the labels, in any language), whether there's
+        more below the fold (→ scroll), and the ranked menu with click points. Same ids/coords as
+        observe(), so a model's pick maps 1:1 to an action. Carries no headers/tokens."""
+        m = self._scan_raw() if scan else self.session.page.evaluate(_PERCEIVE_JS)
         els = _rank(m["els"], m["vw"], m["vh"], limit=limit)
-        below = sum(1 for e in m["els"] if e["box"][1] >= m["vh"])
+        below = sum(1 for e in m["els"] if e["pageY"] >= m["scrollY"] + m["vh"])
         return {
-            "blocking": [{"id": b["id"], "verb": b["verb"], "label": b["label"]}
-                         for b in _pick_blockers(m["els"])],
+            "overlays": [{"id": e["id"], "role": e["role"], "label": e["label"],
+                          "at": [e["box"][0] + e["box"][2] // 2, e["box"][1] + e["box"][3] // 2]}
+                         for e in _rank(m["els"], m["vw"], m["vh"], overlay=True, limit=12)],
             "scroll": {"y": m["scrollY"], "height": m["scrollHeight"],
                        "hasMore": below > 0, "below": below},
             "viewport": [m["vw"], m["vh"]],
             "elements": [{"id": e["id"], "role": e["role"], "label": e["label"],
+                          "overlay": e["overlay"],
                           "at": [e["box"][0] + e["box"][2] // 2, e["box"][1] + e["box"][3] // 2]}
                          for e in els],
         }

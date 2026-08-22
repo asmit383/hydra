@@ -115,10 +115,12 @@ def test_replay_forwards_auth_but_not_browser_headers():
     assert not any(k.lower() in ("cookie", "host", "origin", "sec-fetch-mode", "user-agent") for k in fwd)
 
 
-# ── perception core v2: ranking + blocker detection (browser-free, synthetic records) ─
-def _rec(id, label="", role="button", verb=None, overlay="", inVp=True, occ=False, box=(0, 0, 40, 20)):
-    return {"id": id, "label": label, "role": role, "verb": verb, "overlayText": overlay,
-            "oauth": False, "inVp": inVp, "occ": occ, "box": list(box)}
+# ── perception core: the page map — ranking/dedup/filters (browser-free, synthetic records) ─
+# NO keywords anywhere: observe() just maps the DOM structurally; the agent decides what to click.
+def _rec(id, label="", role="button", overlay=False, inVp=True, occ=False, box=(0, 0, 40, 20)):
+    x, y, w, h = box
+    return {"id": id, "label": label, "role": role, "overlay": overlay,
+            "inVp": inVp, "occ": occ, "box": list(box), "pageY": y}
 
 
 def test_rank_drops_occluded_elements():
@@ -141,34 +143,20 @@ def test_rank_dedups_twins_and_keeps_the_onscreen_one():
     assert len(out) == 1 and out[0]["id"] == 2         # collapsed; kept the on-screen twin
 
 
-def test_rank_floats_blockers_then_viewport_over_offscreen():
+def test_rank_orders_onscreen_before_offscreen():
     from hydra.sdk import _rank
     recs = [_rec(1, "content", role="link", inVp=False, box=(0, 3000, 100, 20)),
-            _rec(2, "Chiudi", role="dismiss", verb="close", overlay="popup", box=(470, 390, 60, 20)),
-            _rec(3, "nav", role="link", inVp=True, box=(0, 0, 40, 20))]
+            _rec(2, "near-center", role="link", inVp=True, box=(470, 390, 100, 20)),
+            _rec(3, "top nav", role="link", inVp=True, box=(0, 0, 40, 20))]
     ids = [e["id"] for e in _rank(recs, 1000, 800)]
-    assert ids[0] == 2                                 # a blocker outranks everything
-    assert ids.index(3) < ids.index(1)                 # on-screen outranks off-screen
+    assert ids.index(2) < ids.index(1)                 # on-screen outranks off-screen
+    assert ids.index(3) < ids.index(1)
 
 
-def test_rank_role_and_contains_filters():
+def test_rank_filters_role_contains_and_overlay():
     from hydra.sdk import _rank
-    recs = [_rec(1, "Calcio", role="link"), _rec(2, "Tennis", role="link"), _rec(3, "go", role="button")]
+    recs = [_rec(1, "Calcio", role="link"), _rec(2, "Tennis", role="link"),
+            _rec(3, "go", role="button"), _rec(4, "popup btn", role="button", overlay=True)]
     assert [e["id"] for e in _rank(recs, 1000, 800, contains="cal")] == [1]
-    assert [e["id"] for e in _rank(recs, 1000, 800, role="button")] == [3]
-
-
-def test_pick_blockers_accept_first_one_per_overlay():
-    from hydra.sdk import _pick_blockers
-    recs = [_rec(1, "Accetta tutti", role="dismiss", verb="accept", overlay="cookie privacy"),
-            _rec(2, "Rifiuta", role="dismiss", verb="reject", overlay="cookie privacy"),
-            _rec(3, "Chiudi", role="dismiss", verb="close", overlay="Ehi Sisal popup")]
-    bl = _pick_blockers(recs)
-    assert [b["id"] for b in bl] == [1, 3]             # accept wins its overlay; one per overlay; accept-first
-
-
-def test_pick_blockers_ignores_non_blockers_and_occluded():
-    from hydra.sdk import _pick_blockers
-    recs = [_rec(1, "login", verb=None),
-            _rec(2, "Chiudi", verb="close", overlay="x", occ=True)]
-    assert _pick_blockers(recs) == []
+    assert {e["id"] for e in _rank(recs, 1000, 800, role="button")} == {3, 4}
+    assert [e["id"] for e in _rank(recs, 1000, 800, overlay=True)] == [4]   # keyword-free overlay filter
