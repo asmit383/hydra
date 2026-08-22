@@ -104,20 +104,28 @@ with Hydra(proxies="proxies.txt", seed=7) as h:
         print(c["fired_on"], "→", c["url"])         # e.g. "open details → /api/getDetails"
 ```
 
-### 4 · Let an AI decide (optional) — the action space
-`observe()` turns the DOM into a small, labeled, **spatial** menu (visible elements only, each
-with `box=[x,y,w,h]` to disambiguate duplicates, a stable id, and an `oauth` trap flag). The AI
-reads it, picks an `id`, and the SDK acts on it — humanized.
+### 4 · Let an AI decide (optional) — the page map
+`observe()` **maps** the page: a ranked, deduped list of interactive elements — each with what
+it is (`role`, `label`), where it is (`box=[x,y,w,h]` + an `inVp` flag), whether it's actually
+clickable (occluded ones dropped), and a **structural `overlay` flag** (is it inside a dialog /
+modal / floating layer). **No site or language knowledge** — the agent reads the labels and
+decides what to click, *including how to dismiss an overlay* (just click its control). Ranked by
+relevance, not DOM order.
 ```python
 with Hydra(seed=7) as h:
     h.navigate("https://example.com")
-    actions = h.observe()
-    # → [{"id":1,"kind":"a","label":"Tennis","box":[110,140,54,41],"oauth":false}, ...]
-    # your LLM picks id 1 given the goal, then:
-    h.click(1)                                      # act by observe() id
+    for e in h.observe():          # filters: role= · contains= · in_viewport= · overlay= · scan=True
+        ...
+    # → [{"id":1,"role":"link","label":"Tennis","box":[110,140,54,41],"inVp":True,"overlay":False}, ...]
+    h.click(1)                     # act by observe() id (humanized)
 ```
-> The AI is an **optional** consumer of `observe()`. Everything else — `navigate`, `capture`,
-> `type`, `click`, `scroll`, `fetch` — is deterministic and callable directly, no LLM.
+- `observe(scan=True)` scrolls the whole page and returns **one merged map** (reaches content
+  below the fold).
+- `snapshot()` is the same map, **token-lean for an LLM** (overlays + scroll state + elements,
+  same ids/coords) — so a model's pick maps 1:1 to a deterministic `click(id)`.
+
+> The AI is an **optional** consumer. Everything else — `navigate`, `capture`, `type`, `click`,
+> `scroll`, `fetch` — is deterministic and callable directly, no LLM.
 
 ### 5 · Behind a login
 Log in once by hand, then reuse the saved session:
@@ -148,8 +156,8 @@ with Hydra(seed=7) as h:
     h.page.evaluate("() => document.title")
 ```
 
-**Object surface:** `navigate` · `capture` · `open` · `act` · `observe` · `type` / `click` /
-`move_to` / `idle` / `scroll` · `fetch` · properties `page` / `persona` / `exit` / `context`.
+**Object surface:** `navigate` · `capture` · `open` · `act` · `observe` / `snapshot` · `type` /
+`click` / `move_to` / `idle` / `scroll` · `fetch` · properties `page` / `persona` / `exit` / `context`.
 
 ---
 
