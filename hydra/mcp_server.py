@@ -91,9 +91,11 @@ def type_text(id: int, text: str) -> dict:
 
 
 @mcp.tool()
-def endpoints() -> list:
-    """Every internal API discovered so far this session, stripped of headers/tokens."""
-    return [_safe(x) for x in _h().context]
+def endpoints() -> dict:
+    """Every internal API discovered so far this session, stripped of headers/tokens.
+    Returns {count, endpoints:[{url,method,status,shape,size,auth,fired_on}]}."""
+    eps = [_safe(x) for x in _h().context]
+    return {"count": len(eps), "endpoints": eps}
 
 
 @mcp.tool()
