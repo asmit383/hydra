@@ -1,4 +1,17 @@
-from hydra.discover import (_is_noise, _looks_like_data, _shape, _challenge_title)
+from hydra.discover import (_is_noise, _looks_like_data, _post_data, _shape, _challenge_title)
+
+
+class _BinReq:
+    """A request whose post_data raises (binary/gzip body) — like an antibot telemetry beacon."""
+    @property
+    def post_data(self):
+        raise UnicodeDecodeError("utf-8", b"\x1f\x8b", 0, 1, "invalid start byte")
+    post_data_buffer = b"\x1f\x8b\x08\x00binary-beacon"
+
+
+def test_post_data_survives_binary_body():
+    # a binary/gzipped POST must NOT crash the listener (it used to kill discovery for the page)
+    assert _post_data(_BinReq()) is not None          # falls back to the buffer, stable dedup key
 
 
 def test_noise_filters_known_junk():

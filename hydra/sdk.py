@@ -20,7 +20,7 @@ import random
 import time
 
 from hydra.detect import classify
-from hydra.discover import (_BLOCK_HOSTS, _is_noise, _looks_like_data, _shape,
+from hydra.discover import (_BLOCK_HOSTS, _is_noise, _looks_like_data, _post_data, _shape,
                             capture as _capture)
 from hydra.heal import HealSession
 from hydra.human import Human
@@ -333,7 +333,7 @@ class Hydra:
         def on_resp(response):
             try:
                 u, low = response.url, response.url.lower()
-                key = (u, response.request.post_data)   # dedup by URL+body (keep POST/GraphQL ops)
+                key = (u, _post_data(response.request))   # dedup by URL+body (keep POST/GraphQL ops)
                 if key in self._seen or _is_noise(u) or any(b in low for b in _BLOCK_HOSTS):
                     return
                 ctype = (response.headers or {}).get("content-type", "").lower()
@@ -349,7 +349,7 @@ class Hydra:
                 cand = {"url": u, "method": req.method, "status": response.status,
                         "shape": shape, "sample": sample, "size": len(_json.dumps(data)),
                         "auth": _auth_of(req.headers), "fired_on": label,       # ← the CONTEXT
-                        "request_headers": dict(req.headers), "post_data": req.post_data}  # for replay
+                        "request_headers": dict(req.headers), "post_data": _post_data(req)}  # for replay
                 new.append(cand)
                 self.context.append(cand)
             except Exception:

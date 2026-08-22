@@ -59,6 +59,21 @@ class ApiCandidate:
     sample: object            # a small slice of the JSON, to confirm it's the data
 
 
+def _post_data(req):
+    """The POST body, or None if absent/binary. Playwright's `post_data` utf-8-DECODES and RAISES
+    on a binary or gzipped body (e.g. an antibot telemetry beacon — gzip starts 0x1f 0x8b) — which
+    would crash the response listener and lose EVERY endpoint on the page. `post_data_buffer` never
+    decodes, so fall back to it (lossy-decoded, just for a stable dedup key) and never throw."""
+    try:
+        return req.post_data
+    except Exception:
+        try:
+            buf = req.post_data_buffer
+        except Exception:
+            buf = None
+        return buf.decode("utf-8", "replace") if buf else None
+
+
 @dataclass
 class StreamCandidate:
     """A live stream — WebSocket or SSE — carrying pushed data (live odds, tickers)."""
@@ -248,7 +263,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                 is_block = True
         # dedup by URL *and* body: plain POST-GraphQL fires many operations to the SAME
         # /graphql URL, differing only in the body — key on both so we don't lose them.
-        key = (u, response.request.post_data)
+        key = (u, _post_data(response.request))
         if is_block or key in seen or _is_noise(u):
             return
         # SSE stream? record the endpoint (can't read a streaming body) and move on.
@@ -281,7 +296,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             size=len(json.dumps(data)),
             shape=shape,
             request_headers=dict(req.headers),
-            post_data=req.post_data,
+            post_data=_post_data(req),
             sample=sample,
         ))
 
