@@ -89,8 +89,8 @@ def _ease(t: float) -> float:
 
 
 def trajectory(mp: MousePersona, x0: float, y0: float, x1: float, y1: float, rng) -> list[tuple]:
-    """Humanized path (x0,y0)→(x1,y1) as [(x, y, dt_ms), …]. DENSE sampling (~1 point / 3px)
-    so the motion is smooth, an ease-in-out velocity profile, a sine-arc bow, and SMALL
+    """Humanized path (x0,y0)→(x1,y1) as [(x, y, dt_ms), …]. Sampling (~1 point / 9px, ≤60 pts —
+    each point is a CDP round-trip) so the motion is smooth, an ease-in-out velocity profile, a sine-arc bow, and SMALL
     per-sample tremor. Coords are fractional on purpose (integer-only is a tell). Persona
     drives curve/speed/tremor/overshoot → each session moves differently.
     (Follows the measured-input approach of heydryft/human-input's path.ts — dense samples +
@@ -112,8 +112,11 @@ def trajectory(mp: MousePersona, x0: float, y0: float, x1: float, y1: float, rng
         sd = math.hypot(sdx, sdy) or 1.0
         nx, ny = -sdy / sd, sdx / sd                   # perpendicular → bow direction
         bow = (rng.random() - 0.5) * min(80.0, sd * mp.curve)
-        steps = max(10, min(200, round(sd / 4)))       # ~1 sample / 4px → smooth, fewer IPC round-trips
-        dt = (mp.speed * (80 + sd * 0.45) * rng.uniform(0.9, 1.1)) / steps
+        # Each point is a `page.mouse.move` = one CDP round-trip, so point COUNT (not px density)
+        # sets wall-clock. ~1 sample/9px, capped at 60, keeps the path smooth (below frame rate)
+        # while cutting IPC ~3× — the old sd/4 (up to 200 pts) is what made moves feel sluggish.
+        steps = max(8, min(60, round(sd / 9)))
+        dt = (mp.speed * (50 + sd * 0.34) * rng.uniform(0.9, 1.1)) / steps
         for i in range(1, steps + 1):
             t = i / steps
             e = _ease(t)
