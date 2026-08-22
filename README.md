@@ -167,15 +167,18 @@ The SDK is generic: it *maps* the page and *acts*, with no site or language know
 judgment — *which* element is a real match vs a nav link vs a pools game — is the LLM's. Two ways
 to supply it:
 
-**1 · In-process (`hydra.pilot`)** — an injectable decision loop. `pip install "hydra[llm]"` + an
-`ANTHROPIC_API_KEY`:
+**1 · In-process (`hydra.pilot`)** — an injectable decision loop; give it a goal once and it runs
+to completion (the cron/unattended shape). The decider is **provider-agnostic** — `openai_decider`
+speaks any **OpenAI-compatible** API (OpenAI, OpenRouter, Groq, Together, a local vLLM/Ollama), and
+it only needs `httpx` (a core dep); `claude_decider` uses Anthropic natively.
 ```python
 from hydra import Hydra
-from hydra.pilot import pilot, claude_decider
+from hydra.pilot import pilot, openai_decider   # or claude_decider
 
 with Hydra(proxies="proxies.txt") as h:
     h.open("https://example.com")
-    pilot(h, "open a product and load its price API", claude_decider(), max_steps=14)
+    pilot(h, "open a product and load its price API",
+          openai_decider(model="gpt-4o-mini"), max_steps=14)   # OPENAI_API_KEY (+OPENAI_BASE_URL)
     for e in h.context: print(e["fired_on"], e["url"])
 ```
 The decider is pluggable (`state → {action,id,why}`), so the loop is testable without a key and

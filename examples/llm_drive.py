@@ -22,10 +22,25 @@ import sys
 
 ROOT = __file__.rsplit("/examples/", 1)[0]
 sys.path.insert(0, ROOT)
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(ROOT, ".env"))
+except Exception:
+    pass
 from hydra import Hydra
-from hydra.pilot import claude_decider, pilot
+from hydra.pilot import claude_decider, openai_decider, pilot
 
 PROXIES = os.path.join(ROOT, "proxies.txt")
+
+
+def pick_decider():
+    """OpenAI-compatible key wins (portable, no extra dep); else native Claude."""
+    model = os.environ.get("HYDRA_MODEL")
+    if os.environ.get("OPENAI_API_KEY"):
+        return openai_decider(model=model or "gpt-4o-mini")
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return claude_decider(model=model or "claude-sonnet-4-6")
+    return None
 
 
 def main():
@@ -33,15 +48,16 @@ def main():
         print('usage: python examples/llm_drive.py "<start_url>" "<goal>"')
         return
     url, goal = sys.argv[1], sys.argv[2]
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("set ANTHROPIC_API_KEY (and `pip install anthropic`) first.")
+    decide = pick_decider()
+    if decide is None:
+        print("set OPENAI_API_KEY (any OpenAI-compatible provider) or ANTHROPIC_API_KEY in .env")
         return
 
     proxies = PROXIES if os.path.exists(PROXIES) else None
     with Hydra(proxies=proxies, seed=random.randint(1, 99999), headful=True) as h:
         print(f"→ {url}\n  goal: {goal}\n")
         h.open(url, wait_ms=6000)
-        pilot(h, goal, claude_decider(), max_steps=16)
+        pilot(h, goal, decide, max_steps=16)
 
         print("\n── APIs discovered along the way (tagged by the step that fired them) ──")
         for x in sorted(h.context, key=lambda x: -(x.get("size") or 0))[:12]:

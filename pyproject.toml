@@ -19,7 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 mcp = ["mcp", "python-dotenv"]          # hydra.mcp_server — drive from an MCP client
-llm = ["anthropic", "python-dotenv"]    # hydra.pilot.claude_decider — LLM decision loop
+llm = ["python-dotenv"]                  # hydra.pilot — OpenAI-compatible decider (httpx is core)
+claude = ["anthropic", "python-dotenv"]  # hydra.pilot.claude_decider — native Claude
 
 [project.urls]
 Homepage = "https://github.com/asmit383/hydra"

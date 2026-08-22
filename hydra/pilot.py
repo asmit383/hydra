@@ -80,10 +80,37 @@ def pilot(h, goal: str, decide, *, max_steps: int = 14, log=print) -> list[dict]
     return getattr(h, "context", [])
 
 
+def openai_decider(model: str = "gpt-4o-mini", *, base_url: str | None = None,
+                   api_key: str | None = None, max_tokens: int = 250, timeout: float = 45):
+    """A decider backed by ANY OpenAI-compatible chat API — OpenAI, OpenRouter, Groq, Together,
+    a local vLLM/llama.cpp/Ollama server, etc. Uses httpx (a core dep) — no vendor SDK. Point
+    `base_url` at the provider (default OpenAI); key from arg or OPENAI_API_KEY. This is the
+    portable default — great for cron where you want a cheap or local model.
+    Examples: base_url='https://openrouter.ai/api/v1' · 'http://localhost:8000/v1'."""
+    import os
+
+    import httpx
+    base = (base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    key = api_key or os.environ.get("OPENAI_API_KEY", "")
+
+    def decide(state_text: str) -> dict:
+        r = httpx.post(f"{base}/chat/completions",
+                       headers={"Authorization": f"Bearer {key}"},
+                       json={"model": model, "max_tokens": max_tokens,
+                             "messages": [{"role": "system", "content": _SYSTEM},
+                                          {"role": "user", "content": state_text}]},
+                       timeout=timeout)
+        r.raise_for_status()
+        return parse_action(r.json()["choices"][0]["message"]["content"])
+
+    return decide
+
+
 def claude_decider(model: str = "claude-sonnet-4-6", *, api_key: str | None = None,
                    max_tokens: int = 250):
-    """A decider backed by Claude. Lazy-imports `anthropic` so the rest of pilot works without it.
-    Needs `pip install anthropic` and ANTHROPIC_API_KEY (or pass api_key=)."""
+    """A decider backed by Claude natively. Lazy-imports `anthropic` (only dep for this one).
+    Needs `pip install anthropic` and ANTHROPIC_API_KEY (or pass api_key=). For most setups
+    `openai_decider` is simpler (no extra dep, any provider incl. Claude via OpenRouter)."""
     import anthropic
     client = anthropic.Anthropic(**({"api_key": api_key} if api_key else {}))
 
@@ -95,4 +122,4 @@ def claude_decider(model: str = "claude-sonnet-4-6", *, api_key: str | None = No
     return decide
 
 
-__all__ = ["pilot", "claude_decider", "format_state", "parse_action"]
+__all__ = ["pilot", "openai_decider", "claude_decider", "format_state", "parse_action"]

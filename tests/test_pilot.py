@@ -61,6 +61,29 @@ def test_pilot_executes_the_deciders_actions_then_stops_on_done():
     assert [c["fired_on"] for c in ctx] == ["llm:dismiss cookie bar", "llm:into prematch"]
 
 
+def test_openai_decider_builds_request_and_parses(monkeypatch):
+    import httpx
+    from hydra.pilot import openai_decider
+    seen = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"choices": [{"message": {"content": '{"action":"click","id":7,"why":"go"}'}}]}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        seen.update(url=url, headers=headers, body=json)
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    decide = openai_decider(model="gpt-4o-mini", base_url="https://openrouter.ai/api/v1", api_key="k")
+    action = decide("GOAL: x")
+    assert action == {"action": "click", "id": 7, "why": "go"}          # parsed the model reply
+    assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"  # OpenAI-compatible path
+    assert seen["headers"]["Authorization"] == "Bearer k"
+    assert seen["body"]["model"] == "gpt-4o-mini" and seen["body"]["messages"][0]["role"] == "system"
+
+
 def test_pilot_stops_on_unparseable_and_respects_max_steps():
     h = _FakeH()
     ctx = pilot(h, "x", lambda s: {"action": "stop", "why": "give up"}, max_steps=8, log=lambda *_: None)
