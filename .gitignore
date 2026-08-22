@@ -22,3 +22,6 @@ behavioral.md
 # datasets (large, non-commercial license) — never commit
 data/
 *.zip
+
+# local-only demo scripts (not for publish)
+examples/sisal_odds.py
