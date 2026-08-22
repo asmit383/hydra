@@ -15,7 +15,10 @@ runcrate.json
 *.session.json
 *.state.json
 .github/workflows/tests.yml
+# local-only planning / prep docs — never commit (only README is public)
 interview.md
+phases.md
+project.md
 agent_plan.md
 behavioral.md
 
