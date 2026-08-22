@@ -29,6 +29,9 @@ class Relay:
         self._thread = None
         self._ready = threading.Event()
         self._conns: set = set()   # active client writers — closed on a swap
+        self._tasks: set = set()   # STRONG refs to in-flight handlers (asyncio only weak-refs
+                                   # tasks; without this they're GC'd mid-tunnel → "Task was
+                                   # destroyed but it is pending!")
         self.port: int | None = None
 
     # ---- the API the heal loop uses ------------------------------------------
@@ -63,13 +66,28 @@ class Relay:
     def stop(self) -> None:
         if self._loop:
             self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=2)           # let the loop drain + close before we move on
 
     # ---- the asyncio forwarding server (runs in its own thread) ---------------
     def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._loop.run_until_complete(self._serve())
-        self._loop.run_forever()
+        try:
+            self._loop.run_forever()
+        finally:
+            # graceful teardown: cancel in-flight tunnels and let them unwind, THEN close —
+            # else the pending _handle()/_pipe() tasks are GC'd as "Task was destroyed but it
+            # is pending!" (harmless, but a wall of red at shutdown).
+            if self._server:
+                self._server.close()
+            pending = asyncio.all_tasks(self._loop)
+            for t in pending:
+                t.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            self._loop.close()
 
     async def _serve(self) -> None:
         self._server = await asyncio.start_server(self._spawn, "127.0.0.1", 0)
@@ -77,7 +95,9 @@ class Relay:
         self._ready.set()
 
     def _spawn(self, creader, cwriter) -> None:
-        asyncio.ensure_future(self._handle(creader, cwriter))
+        task = asyncio.ensure_future(self._handle(creader, cwriter))
+        self._tasks.add(task)                      # keep a strong ref…
+        task.add_done_callback(self._tasks.discard)  # …until it finishes
 
     async def _handle(self, creader, cwriter) -> None:
         up = self._up                       # snapshot the CURRENT upstream for this connection

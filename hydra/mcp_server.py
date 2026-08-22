@@ -15,6 +15,8 @@ Setup:
 Then, in a session, drive it: open_page(url) → snapshot() → click(id) / scroll() → endpoints() →
 fetch(url_contains). One persistent, self-healing browser behind the tools.
 """
+import concurrent.futures
+import functools
 import json
 import os
 
@@ -25,6 +27,21 @@ from hydra import Hydra
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 mcp = MCPServer("hydra")
 _S = {"h": None}
+
+# Playwright's SYNC api is thread-affine: the browser/page objects belong to the thread that
+# created them. But this MCP framework runs each sync tool via anyio.to_thread — an arbitrary
+# worker thread PER CALL. So a call that lands on a different worker than the one that opened the
+# session hits "no running event loop". Fix: pin the whole session (create + every call) to ONE
+# dedicated thread, and marshal every tool onto it.
+_LOOP = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="hydra-session")
+
+
+def _pinned(fn):
+    """Run `fn` on the single session thread (Playwright objects live there) and block for it."""
+    @functools.wraps(fn)
+    def wrapper(*a, **k):
+        return _LOOP.submit(lambda: fn(*a, **k)).result()
+    return wrapper
 
 
 def _proxies():
@@ -49,6 +66,7 @@ def _safe(x: dict) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def open_page(url: str) -> dict:
     """Open a URL in the persistent stealth session (self-heals past antibot / geo-lock) and
     return the page map: overlays to clear, scroll state, and ranked interactive elements."""
@@ -58,6 +76,7 @@ def open_page(url: str) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def snapshot() -> dict:
     """Map the CURRENT page — overlays (dismiss these first), scroll {y, hasMore}, and the ranked
     elements (each {id, role, label, overlay}). Use the ids with click()/type_text(). No secrets."""
@@ -65,6 +84,7 @@ def snapshot() -> dict:
 
 
 @mcp.tool()
+@_pinned
 def click(id: int) -> dict:
     """Click an element by its snapshot id (humanized mouse) and capture any internal APIs the
     click fires. Returns {snapshot, new_endpoints} — new_endpoints is stripped of auth/headers."""
@@ -75,6 +95,7 @@ def click(id: int) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def scroll(steps: int = 3) -> dict:
     """Scroll down (humanized) to reveal more content, then return the updated page map."""
     h = _h()
@@ -83,6 +104,7 @@ def scroll(steps: int = 3) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def type_text(id: int, text: str) -> dict:
     """Type `text` into a field by its snapshot id (per-keystroke human timing). Returns the map."""
     h = _h()
@@ -91,6 +113,7 @@ def type_text(id: int, text: str) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def endpoints() -> dict:
     """Every internal API discovered so far this session, stripped of headers/tokens.
     Returns {count, endpoints:[{url,method,status,shape,size,auth,fired_on}]}."""
@@ -99,6 +122,7 @@ def endpoints() -> dict:
 
 
 @mcp.tool()
+@_pinned
 def fetch(url_contains: str) -> dict:
     """Replay a discovered endpoint IN-SESSION (warm cookie; auth stays server-side) and return a
     sample of the live data. Match by a substring of the endpoint URL (see endpoints())."""
@@ -113,6 +137,7 @@ def fetch(url_contains: str) -> dict:
 
 
 @mcp.tool()
+@_pinned
 def reset() -> str:
     """Close the session — a fresh identity + persona is minted on the next call."""
     if _S["h"] is not None:

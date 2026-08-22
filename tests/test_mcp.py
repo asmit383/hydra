@@ -14,6 +14,29 @@ def test_mcp_tools_registered():
             "endpoints", "fetch", "reset"} <= names
 
 
+def test_pinned_runs_all_calls_on_one_thread():
+    """Regression: Playwright's sync API is thread-affine, but the MCP framework dispatches each
+    sync tool onto an arbitrary anyio worker thread. `_pinned` must funnel EVERY call onto the one
+    session thread — else a call landing on a different worker hits 'no running event loop'."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from hydra.mcp_server import _pinned
+
+    @_pinned
+    def where_am_i():
+        return threading.get_ident()
+
+    # call from many DISTINCT caller threads (mimics anyio.to_thread's per-call worker)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        session_threads = set(pool.map(lambda _: where_am_i(), range(40)))
+    caller = where_am_i()                       # and from the main thread
+
+    assert len(session_threads) == 1                       # all work ran on ONE session thread
+    assert session_threads == {caller}                     # …the same one every time
+    assert caller != threading.get_ident()                 # …and it's NOT the calling thread
+
+
 def test_safe_never_leaks_headers_or_body():
     from hydra.mcp_server import _safe
     x = {"url": "/a", "method": "GET", "status": 200, "shape": "dict", "size": 9,
