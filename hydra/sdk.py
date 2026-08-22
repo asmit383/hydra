@@ -17,6 +17,7 @@ deterministic and callable directly, no LLM required.
 from __future__ import annotations
 
 import random
+import time
 
 from hydra.detect import classify
 from hydra.discover import (_BLOCK_HOSTS, _is_noise, _looks_like_data, _shape,
@@ -80,6 +81,20 @@ def _make_persona(seed, corpus_path):
 _PERCEIVE_JS = r"""() => {
   const vw = innerWidth, vh = innerHeight, sy = scrollY;
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const fieldLabel = (el) => {                       // the CAPTION of an input — what a human reads
+    const byIds = (ids) => clean((ids || '').split(/\s+/).map((i) => {
+      const e = i && document.getElementById(i); return e ? e.innerText : ''; }).join(' '));
+    const lb = byIds(el.getAttribute('aria-labelledby'));         // 1. aria-labelledby
+    if (lb) return lb;
+    if (el.getAttribute('aria-label')) return clean(el.getAttribute('aria-label'));   // 2. aria-label
+    if (el.id) {                                                  // 3. <label for="…">
+      try { const l = document.querySelector('label[for="' + (window.CSS ? CSS.escape(el.id) : el.id) + '"]');
+            if (l && clean(l.innerText)) return clean(l.innerText); } catch (e) {}
+    }
+    const wrap = el.closest && el.closest('label');              // 4. a wrapping <label>
+    if (wrap && clean(wrap.innerText)) return clean(wrap.innerText);
+    return clean(el.placeholder || el.title || el.name || '');    // 5. placeholder / name
+  };
   const overlayRoot = (el) => {                     // STRUCTURAL, keyword-free: dialog / modal /
     let n = el, hop = 0;                            // floating high-z layer (not a sticky header)
     while (n && hop++ < 12) {
@@ -113,15 +128,23 @@ _PERCEIVE_JS = r"""() => {
     if (!el.hasAttribute('data-hydra-id'))           // stable id — survives scroll re-maps
       el.setAttribute('data-hydra-id', String(window.__hid = (window.__hid || 0) + 1));
     const id = parseInt(el.getAttribute('data-hydra-id'), 10);
-    let label = clean(el.getAttribute('aria-label') || el.innerText || el.value ||
-                      el.placeholder || el.title || el.name || el.alt).slice(0, 60);
-    if (!label) { const s = el.querySelector && el.querySelector('title');   // icon-only fallback
-                  label = clean(s && s.textContent).slice(0, 60); }
     const tag = el.tagName.toLowerCase();
-    const role = (tag === 'input' || tag === 'select' || tag === 'textarea') ? 'field'
+    const isField = (tag === 'input' || tag === 'select' || tag === 'textarea');
+    let label, value = null;
+    if (isField) {                                    // a field: caption = WHAT it is; value = what's IN it
+      label = fieldLabel(el).slice(0, 60);
+      value = clean(el.value).slice(0, 60) || null;
+      if (!label) label = value || '';                // last resort if it has no caption at all
+    } else {
+      label = clean(el.getAttribute('aria-label') || el.innerText || el.value ||
+                    el.placeholder || el.title || el.name || el.alt).slice(0, 60);
+      if (!label) { const s = el.querySelector && el.querySelector('title');   // icon-only fallback
+                    label = clean(s && s.textContent).slice(0, 60); }
+    }
+    const role = isField ? 'field'
       : (el.getAttribute('role') === 'tab') ? 'tab'
       : (tag === 'a') ? 'link' : 'button';
-    out.push({id, tag, type: el.type || null, label, role, overlay: !!overlayRoot(el),
+    out.push({id, tag, type: el.type || null, label, value, role, overlay: !!overlayRoot(el),
               inVp, occ, box: [Math.round(r.x), Math.round(r.y),
                                Math.round(r.width), Math.round(r.height)],
               pageY: Math.round(r.y + sy)});
@@ -432,6 +455,54 @@ class Hydra:
         return {"vw": vw, "vh": vh, "scrollY": last if last >= 0 else 0,
                 "scrollHeight": sh, "els": list(merged.values())}
 
+    def wait_ready(self, *, timeout_ms: int = 15000, poll_ms: int = 250, min_els: int = 1,
+                   settle_polls: int = 12) -> int:
+        """Wait until the page has stopped changing (QUIESCENT), then return its interactive-element
+        count. Universal by design — no site, vendor, framework, or content-shape assumption:
+        readiness is simply *the map stopped changing*.
+
+        A navigating click/goto returns before the destination is usable — the page may still be
+        hydrating, lazy-loading, or bouncing through one or more redirect hops (an interstitial /
+        i18n gate / auth bounce / SPA route), any of which can briefly present a page that looks
+        'done'. So each poll takes a SIGNATURE — (current URL, interactive-element count) — and ANY
+        change resets the settle window. We only trust the page once that signature holds unchanged
+        for `settle_polls` consecutive reads (with at least `min_els` elements): a redirect changes
+        the URL and resets us; late/streamed content changes the count and resets us. Nothing here
+        keys on what the site IS, only on whether it has settled.
+
+        Bounded by `timeout_ms`: a page that genuinely never settles (a live feed / ticker) returns
+        its latest map rather than hanging. This is an OPTIMISATION, not a correctness dependency —
+        the caller can always re-map; wait_ready just makes an early/blank map the rare case."""
+        page = self.session.page
+        end = time.monotonic() + timeout_ms / 1000.0
+        prev_sig, stable, n = None, 0, 0
+        while True:
+            try:
+                n = len(page.evaluate(_PERCEIVE_JS)["els"])
+            except Exception:
+                n = 0                                   # execution context torn down mid-redirect
+            try:
+                u = page.url
+            except Exception:
+                u = None
+            sig = (u, n)
+            stable = stable + 1 if sig == prev_sig else 0   # URL or content changed → restart settle
+            prev_sig = sig
+            if n >= min_els and stable >= settle_polls:  # held steady long enough → settled
+                return n
+            if time.monotonic() >= end:                  # never settled → return whatever we have
+                return n
+            page.wait_for_timeout(poll_ms)
+
+    def screenshot(self, *, full_page: bool = False, quality: int = 70) -> bytes:
+        """The VISION fallback — a JPEG of the CURRENT page, for when the structural map isn't
+        enough: cross-origin iframes / canvas / WebGL / custom widgets the a11y tree omits, or to
+        VISUALLY VERIFY an action landed (e.g. did the text go in the right field?). Returns raw
+        bytes (JPEG, for small size → cheap vision tokens); the caller renders or ships it. The map
+        (observe/snapshot) stays PRIMARY — cheaper, precise, deterministic ids; this is the escape
+        hatch when pixels are the only truth."""
+        return self.session.page.screenshot(type="jpeg", quality=quality, full_page=full_page)
+
     def snapshot(self, *, limit=30, scan=False):
         """The MCP projection — the SAME map, token-lean for an LLM: the overlays that are up
         (so the agent clears them first — it reads the labels, in any language), whether there's
@@ -449,6 +520,9 @@ class Hydra:
             "viewport": [m["vw"], m["vh"]],
             "elements": [{"id": e["id"], "role": e["role"], "label": e["label"],
                           "overlay": e["overlay"],
+                          # for a field, show what's already IN it (blank = empty) so the agent
+                          # doesn't re-type or mistake an autocomplete-filled field for a caption
+                          **({"value": e.get("value")} if e["role"] == "field" else {}),
                           "at": [e["box"][0] + e["box"][2] // 2, e["box"][1] + e["box"][3] // 2]}
                          for e in els],
         }

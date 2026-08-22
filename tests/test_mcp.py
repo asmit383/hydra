@@ -11,7 +11,7 @@ def test_mcp_tools_registered():
     from hydra.mcp_server import mcp
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert {"open_page", "snapshot", "click", "scroll", "type_text",
-            "endpoints", "fetch", "reset"} <= names
+            "endpoints", "fetch", "reset", "screenshot"} <= names
 
 
 def test_pinned_runs_all_calls_on_one_thread():

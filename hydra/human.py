@@ -297,8 +297,13 @@ class Human:
 
     def move_to(self, target) -> None:
         """Humanized move onto an element via the generated trajectory, then settle."""
+        loc = self._locate(target)
         try:
-            box = self._locate(target).bounding_box()
+            loc.scroll_into_view_if_needed(timeout=3000)   # below-fold → bring it in first
+        except Exception:
+            pass
+        try:
+            box = loc.bounding_box()
         except Exception:
             return
         if box:
@@ -357,6 +362,10 @@ class Human:
         a human hold — never a teleport-click, never dead-center."""
         loc = self._locate(target)
         try:
+            loc.scroll_into_view_if_needed(timeout=3000)  # CRITICAL: a below-fold target must be
+        except Exception:                                 # scrolled in, else the humanized move lands
+            pass                                          # off-screen, never focuses it, and typing
+        try:                                              # leaks into whatever WAS focused
             box = loc.bounding_box()
         except Exception:
             box = None

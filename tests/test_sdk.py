@@ -28,6 +28,62 @@ def test_persona_falls_back_to_guessed_without_corpus():
     assert isinstance(p, Persona) and p.base_ms > 0  # guessed fallback, still a valid persona
 
 
+class _FakePage:
+    """Scripts perceive() element-counts and (optionally) page.url, one per poll iteration."""
+    def __init__(self, counts, urls=None):
+        self._counts, self._last, self.waits = list(counts), 0, 0
+        self._urls, self._url = (list(urls) if urls is not None else None), "u0"
+
+    def wait_for_load_state(self, *a, **k):
+        pass
+
+    def evaluate(self, _js):
+        if self._counts:
+            self._last = self._counts.pop(0)
+        return {"els": list(range(self._last))}
+
+    @property
+    def url(self):
+        if self._urls:
+            self._url = self._urls.pop(0)
+        return self._url
+
+    def wait_for_timeout(self, _ms):
+        self.waits += 1
+
+
+def _hydra_with_page(page):
+    h = Hydra(seed=7)
+    h.session = type("S", (), {"page": page})()   # inject a fake session (no browser)
+    return h
+
+
+def test_wait_ready_returns_once_quiescent():
+    # a steady page (any size) → ready after the signature holds for settle_polls reads
+    h = _hydra_with_page(_FakePage([12] * 10))
+    assert h.wait_ready(poll_ms=1, timeout_ms=2000, settle_polls=3) == 12
+
+
+def test_wait_ready_resets_when_content_still_changing():
+    # content keeps changing, then holds at 4 → must return 4 (the settled value), not an earlier one
+    h = _hydra_with_page(_FakePage([1, 2, 3, 4, 4, 4]))
+    assert h.wait_ready(poll_ms=1, timeout_ms=2000, settle_polls=2) == 4
+
+
+def test_wait_ready_url_change_resets_settle_window():
+    # a stub (3 els) that then REDIRECTS (URL changes) to a different page (9) — the URL change
+    # resets the window, so we never trust the stub: must return 9, not 3. Site-agnostic.
+    page = _FakePage([3, 3, 9, 9, 9], urls=["stub", "stub", "next", "next", "next"])
+    h = _hydra_with_page(page)
+    assert h.wait_ready(poll_ms=1, timeout_ms=2000, settle_polls=2) == 9
+
+
+def test_wait_ready_is_bounded_when_page_never_settles():
+    # never non-empty → give up at timeout (return 0), not hang
+    h = _hydra_with_page(_FakePage([0] * 100))
+    assert h.wait_ready(poll_ms=1, timeout_ms=200) == 0
+
+
 def test_humanize_is_off_and_not_a_user_knob():
     import inspect
     from hydra.sdk import Hydra as H

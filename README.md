@@ -191,7 +191,9 @@ Code, etc.) drives a persistent session; the client is the brain (no separate AP
 claude mcp add hydra -- /path/to/hydra/.venv/bin/python -m hydra.mcp_server
 ```
 Tools: `open_page` · `snapshot` · `click` · `scroll` · `type_text` · `endpoints` · `fetch` ·
-`reset`. Results are **stripped of auth** — the model sees `url/method/status/shape/size/auth-tag`,
+`screenshot` · `reset`. `snapshot` is the primary (structural, clickable ids); `screenshot` is the
+**vision fallback** for when the map isn't enough (iframe / canvas / custom widget) or to visually
+verify an action. Results are **stripped of auth** — the model sees `url/method/status/shape/size/auth-tag`,
 never the cookies or tokens (those stay server-side; `fetch` replays with them and returns only
 the data).
 

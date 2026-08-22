@@ -21,6 +21,7 @@ import json
 import os
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Image
 
 from hydra import Hydra
 
@@ -45,16 +46,24 @@ def _pinned(fn):
 
 
 def _proxies():
-    p = os.environ.get("HYDRA_PROXIES") or "proxies.txt"
-    p = p if os.path.isabs(p) else os.path.join(_ROOT, p)
+    """Native IP by DEFAULT — a proxy is opt-IN. Only routes through a file when HYDRA_PROXIES
+    points at one (relative paths resolve against the repo root)."""
+    raw = (os.environ.get("HYDRA_PROXIES") or "").strip()
+    if not raw or raw.lower() in ("none", "off", "0", "no", "native"):
+        return None                                           # unset/empty/opt-out → native IP
+    p = raw if os.path.isabs(raw) else os.path.join(_ROOT, raw)
     return p if os.path.exists(p) else None
+
+
+def _headful() -> bool:
+    """Headless by DEFAULT — headful is opt-IN (HYDRA_HEADFUL=1), just to watch the browser."""
+    return (os.environ.get("HYDRA_HEADFUL") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _h() -> Hydra:
     """The one persistent session (lazily opened; self-heals; humanized behavior baked in)."""
     if _S["h"] is None:
-        h = Hydra(proxies=_proxies(),
-                  headful=os.environ.get("HYDRA_HEADFUL", "1") not in ("", "0", "false"))
+        h = Hydra(proxies=_proxies(), headful=_headful())
         h.__enter__()
         _S["h"] = h
     return _S["h"]
@@ -72,6 +81,7 @@ def open_page(url: str) -> dict:
     return the page map: overlays to clear, scroll state, and ranked interactive elements."""
     h = _h()
     h.open(url, wait_ms=5500)
+    h.wait_ready()                     # wait until the page stops changing before we map it
     return h.snapshot()
 
 
@@ -91,6 +101,7 @@ def click(id: int) -> dict:
     h = _h()
     before = len(h.context)
     h.act(id, label=f"mcp:click:{id}")
+    h.wait_ready()                     # a navigating click may redirect/repaint after act() returns
     return {"snapshot": h.snapshot(), "new_endpoints": [_safe(x) for x in h.context[before:]]}
 
 
@@ -110,6 +121,18 @@ def type_text(id: int, text: str) -> dict:
     h = _h()
     h.type(id, text)
     return h.snapshot()
+
+
+@mcp.tool()
+@_pinned
+def screenshot(full_page: bool = False) -> list:
+    """VISION FALLBACK — a picture of the current page. Prefer snapshot() first (cheaper, and it
+    gives clickable ids); reach for this when the map isn't enough: snapshot() came back empty or
+    ambiguous, the content is in a cross-origin iframe / canvas / custom widget, or you want to
+    VISUALLY VERIFY an action landed (e.g. did the text go into the right field?)."""
+    png = _h().screenshot(full_page=full_page)
+    return [Image(data=png, format="jpeg"),
+            "Vision fallback — screenshot of the current page. Use snapshot() for clickable ids."]
 
 
 @mcp.tool()
