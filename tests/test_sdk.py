@@ -78,10 +78,123 @@ def test_wait_ready_url_change_resets_settle_window():
     assert h.wait_ready(poll_ms=1, timeout_ms=2000, settle_polls=2) == 9
 
 
+class _FakeWS:
+    def __init__(self, url):
+        self.url, self._h = url, {}
+    def on(self, ev, fn):
+        self._h[ev] = fn
+    def fire(self, ev, payload):
+        if ev in self._h:
+            self._h[ev](payload)
+
+
+class _WSPage:
+    def __init__(self):
+        self._ws_handler = None
+    def on(self, ev, fn):
+        if ev == "websocket":
+            self._ws_handler = fn
+    def open_ws(self, url):
+        ws = _FakeWS(url)
+        self._ws_handler(ws)
+        return ws
+
+
+def test_watch_streams_captures_websocket_frames():
+    h = _hydra_with_page(_WSPage())
+    h.streams, h._streams_page = [], None
+    h._watch_streams()
+    ws = h.session.page.open_ws("wss://bet365/odds")
+    ws.fire("framesent", "subscribe tennis")
+    ws.fire("framereceived", "Djokovic 1.42 | Nadal 3.10")
+    assert len(h.streams) == 1
+    s = h.streams[0]
+    assert s["url"] == "wss://bet365/odds" and s["n_received"] == 1
+    assert s["sent"] == ["subscribe tennis"] and s["received"] == ["Djokovic 1.42 | Nadal 3.10"]
+    h.session.page.open_ws("wss://bet365/odds")          # same URL again → deduped, still one
+    assert len(h.streams) == 1
+
+
 def test_wait_ready_is_bounded_when_page_never_settles():
     # never non-empty → give up at timeout (return 0), not hang
     h = _hydra_with_page(_FakePage([0] * 100))
     assert h.wait_ready(poll_ms=1, timeout_ms=200) == 0
+
+
+def _healable_hydra(tmp_path, seed=1):
+    """A browser-free Hydra with a 2-exit pool (so the full ladder incl. rotate_exit is live) and
+    stubbed session/human/persona — enough for open_healed()'s loop without launching Camoufox."""
+    from hydra import Hydra
+    px = tmp_path / "p.txt"
+    px.write_text("1.1.1.1:8000:u:p\n2.2.2.2:8000:u:p\n")
+    h = Hydra(proxies=str(px), seed=seed)
+    assert h._ladder == ("patience", "rotate_exit", "drop_session", "relaunch")
+    h.human = type("H", (), {"_rng": None})()
+    h.persona = type("P", (), {"base_ms": 135.0})()
+    h.session = type("S", (), {"page": object()})()
+    h._seen, h.context = set(), []
+    return h
+
+
+class _Res:
+    def __init__(self, sig):
+        self.signals, self.candidates = sig, []
+
+
+def _script_capture(monkeypatch, signals_seq):
+    """Make hydra.sdk._capture return a scripted Signals per navigate; count the calls."""
+    import hydra.sdk as sdk
+    calls = {"n": 0}
+
+    def fake(url, **k):
+        i = min(calls["n"], len(signals_seq) - 1)
+        calls["n"] += 1
+        return _Res(signals_seq[i])
+    monkeypatch.setattr(sdk, "_capture", fake)
+    return calls
+
+
+def test_open_healed_escalates_then_stops_when_recovered(monkeypatch, tmp_path):
+    from hydra import Hydra
+    from hydra.detect import Signals
+    h = _healable_hydra(tmp_path)
+    # 429 rate-limit twice, then the data arrives (oracle GREEN) → healed, stop.
+    calls = _script_capture(monkeypatch, [
+        Signals(oracle_count=0, nav_status=429, retry_after="5", body_len=600),
+        Signals(oracle_count=0, nav_status=429, retry_after="5", body_len=600),
+        Signals(oracle_count=2, nav_status=200, body_len=9000)])
+    heals = []
+    monkeypatch.setattr(Hydra, "_heal", lambda self, lever: heals.append(lever))
+    _cands, v = h.open_healed("http://x", max_heal=4)
+    assert calls["n"] == 3                          # navigated 3x: block, block, clean
+    assert heals == ["rotate_exit", "drop_session"]  # rate_limit lever, then escalate one rung
+    assert v is None                                # recovered → no surviving block
+
+
+def test_open_healed_does_not_heal_a_thin_but_fine_page(monkeypatch, tmp_path):
+    from hydra import Hydra
+    from hydra.detect import Signals
+    h = _healable_hydra(tmp_path)
+    # 200, tiny body, no API, no challenge → classify() says `unknown` (blocked) — but it's NOT a
+    # nav-block, so a plain navigate must LEAVE IT ALONE (the example.com false-positive).
+    calls = _script_capture(monkeypatch, [Signals(oracle_count=0, nav_status=200, body_len=800)])
+    heals = []
+    monkeypatch.setattr(Hydra, "_heal", lambda self, lever: heals.append(lever))
+    _cands, v = h.open_healed("http://x", max_heal=4)
+    assert calls["n"] == 1 and heals == [] and v is None   # navigated once, no heal, not flagged
+
+
+def test_open_healed_returns_the_verdict_when_a_block_outlives_the_ladder(monkeypatch, tmp_path):
+    from hydra import Hydra
+    from hydra.detect import Signals
+    h = _healable_hydra(tmp_path)
+    # a 403 that never clears → after max_heal the standing verdict comes back (so MCP can tell the brain)
+    calls = _script_capture(monkeypatch, [
+        Signals(oracle_count=0, nav_status=403, body_len=500, first_request_block=True)])
+    monkeypatch.setattr(Hydra, "_heal", lambda self, lever: None)
+    _cands, v = h.open_healed("http://x", max_heal=3)
+    assert calls["n"] == 3                          # exhausted the 3 attempts
+    assert v is not None and v.block_class == "ip_block"
 
 
 def test_humanize_is_off_and_not_a_user_knob():

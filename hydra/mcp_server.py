@@ -29,6 +29,8 @@ from hydra.discover import _challenge_title
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 mcp = MCPServer("hydra")
 _S = {"h": None}
+# RUNTIME config (set via the configure() tool, not the launch env). None = fall back to env/default.
+_CFG = {"proxies": None, "headful": None}
 
 # Playwright's SYNC api is thread-affine: the browser/page objects belong to the thread that
 # created them. But this MCP framework runs each sync tool via anyio.to_thread — an arbitrary
@@ -46,25 +48,34 @@ def _pinned(fn):
     return wrapper
 
 
-def _proxies():
-    """Native IP by DEFAULT — a proxy is opt-IN. Only routes through a file when HYDRA_PROXIES
-    points at one (relative paths resolve against the repo root)."""
-    raw = (os.environ.get("HYDRA_PROXIES") or "").strip()
+def _resolve_proxies(raw):
+    """A proxies value → a file path (relative resolves against the repo root) or None (native IP).
+    Empty / 'none'/'off'/'native' → native. `None` here means 'not set' → caller falls back to env."""
+    raw = (raw or "").strip()
     if not raw or raw.lower() in ("none", "off", "0", "no", "native"):
-        return None                                           # unset/empty/opt-out → native IP
+        return None
     p = raw if os.path.isabs(raw) else os.path.join(_ROOT, raw)
     return p if os.path.exists(p) else None
 
 
-def _headful() -> bool:
-    """Headless by DEFAULT — headful is opt-IN (HYDRA_HEADFUL=1), just to watch the browser."""
+def _cfg_proxies():
+    """Effective proxies: the runtime configure() override if set, else HYDRA_PROXIES env, else native."""
+    raw = _CFG["proxies"] if _CFG["proxies"] is not None else os.environ.get("HYDRA_PROXIES")
+    return _resolve_proxies(raw)
+
+
+def _cfg_headful() -> bool:
+    """Effective headful: the runtime override if set, else HYDRA_HEADFUL env, else headless."""
+    if _CFG["headful"] is not None:
+        return bool(_CFG["headful"])
     return (os.environ.get("HYDRA_HEADFUL") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _h() -> Hydra:
-    """The one persistent session (lazily opened; self-heals; humanized behavior baked in)."""
+    """The one persistent session (lazily opened; self-heals; humanized behavior baked in). Built
+    from the current runtime config — change it with configure() and the next open_page relaunches."""
     if _S["h"] is None:
-        h = Hydra(proxies=_proxies(), headful=_headful())
+        h = Hydra(proxies=_cfg_proxies(), headful=_cfg_headful())
         h.__enter__()
         _S["h"] = h
     return _S["h"]
@@ -101,18 +112,46 @@ def _block(h):
 
 @mcp.tool()
 @_pinned
+def configure(proxies: str | None = None, headful: bool | None = None) -> dict:
+    """Set the stealth session config at RUNTIME — no file edits, no reconnect. `proxies` = a
+    proxy-pool file path (e.g. 'proxies.txt') or 'none' for the native IP; `headful` = watch the
+    browser (True) or run headless. Applies to the NEXT open_page (the current session is closed so
+    it relaunches with the new config). Call with no args to just read the current config."""
+    if proxies is not None:
+        _CFG["proxies"] = proxies
+    if headful is not None:
+        _CFG["headful"] = bool(headful)
+    if (proxies is not None or headful is not None) and _S["h"] is not None:
+        try:                                    # drop the old session → next open relaunches w/ new cfg
+            _S["h"].__exit__(None, None, None)
+        finally:
+            _S["h"] = None
+    return {"proxies": _CFG["proxies"] or "native", "headful": _cfg_headful(),
+            "note": "applies on the next open_page"}
+
+
+@mcp.tool()
+@_pinned
 def open_page(url: str) -> dict:
-    """Open a URL in the persistent stealth session and return the page map. On-load JS challenges
-    get a humanized patience wait automatically. If a block is up, the map carries a `block` verdict
-    {class, self_heal, needs}: a captcha wall → `hard_verify` (the brain must solve it); an
-    auto-clearing challenge → `transient` (the server waits it out)."""
+    """Open a URL in the persistent stealth session and return the page map. MECHANICALLY
+    self-heals a real block — a 403/429/503/401/412, a JS challenge, or a clearance-cookie gate
+    makes it escalate the cost ladder (patience → rotate exit → drop session → relaunch),
+    re-navigating on a fresh exit each round, before it hands you the page. A thin-but-fine page
+    (200, no API) is NOT treated as a block. If a block still stands, the map carries a `block`
+    verdict {class, self_heal, needs}: a captcha wall → `hard_verify` (the brain must solve it); a
+    mechanical block that outlived the ladder → its class + what to try next (retry / change exit)."""
     h = _h()
-    h.open(url, wait_ms=5500)          # navigate; the on-load challenge-wait handles patience
-    h.wait_ready()                     # let the page settle before mapping
+    _cands, v = h.open_healed(url, wait_ms=5500)   # navigate + mechanical self-heal (rotate/drop/relaunch)
+    h.wait_ready()                                 # let the (possibly healed) page settle before mapping
     snap = h.snapshot()
-    b = _block(h)                      # captcha/challenge wall? → tell the brain whose job it is
+    if v is not None:                              # a real mechanical block outlived the whole ladder
+        snap["block"] = {"class": v.block_class, "self_heal": True, "healed": False,
+                         "needs": f"escalated the {v.lever} ladder — still blocked; retry later, "
+                                  "change exit (configure proxies=…), or pick another target",
+                         "signal": v.signal}
+    b = _block(h)                                  # captcha/challenge wall → hard_verify (brain/solver)
     if b:
-        snap["block"] = b
+        snap["block"] = b                          # takes precedence — it's the human-actionable one
     return snap
 
 
@@ -203,6 +242,20 @@ def endpoints() -> dict:
     Returns {count, endpoints:[{url,method,status,shape,size,auth,fired_on}]}."""
     eps = [_safe(x) for x in _h().context]
     return {"count": len(eps), "endpoints": eps}
+
+
+@mcp.tool()
+@_pinned
+def streams() -> dict:
+    """Live WebSocket / SSE feeds discovered this session — where PUSH-based sites (sportsbooks,
+    tickers, trading) stream their real DATA (odds, prices) instead of a REST endpoint. The WS
+    companion to endpoints() (which is REST-only). Each feed: url + the client's subscribe frames
+    (how to replay it) + a sample of received frames (the data) + how many frames have arrived."""
+    st = _h().streams
+    return {"count": len(st),
+            "streams": [{"kind": s["kind"], "url": s["url"], "subscribe_frames": s["sent"],
+                         "received_sample": s["received"], "frames_seen": s["n_received"]}
+                        for s in st]}
 
 
 @mcp.tool()

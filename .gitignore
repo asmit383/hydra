@@ -1,4 +1,5 @@
 .env
+.DS_Store
 *.csv
 __pycache__/
 *.py[cod]
@@ -26,8 +27,9 @@ behavioral.md
 data/
 *.zip
 
-# local-only demo scripts (not for publish)
+# local-only scrapers/demos (name client endpoints — not for publish)
 examples/sisal_odds.py
+tests/scrape_*.py
 
 # machine-specific MCP registration (absolute venv path)
 .mcp.json

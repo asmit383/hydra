@@ -33,6 +33,15 @@ from hydra.session import load_proxies, parse_proxy
 # rotate to) — see `_ladder` in __init__.
 _LADDER = ("patience", "rotate_exit", "drop_session", "relaunch")
 
+# The block-classes a NAVIGATE self-heals. classify() is oracle-anchored ("did I get DATA?"), but a
+# plain navigate hasn't triggered any API yet, so the oracle is almost always red — a thin-but-fine
+# page (200, no XHR, like example.com) lands on `unknown` and reads as blocked. That's right for a
+# DATA capture (no data → try the ladder) but WRONG for a navigate (the page is fine; the agent will
+# click around). So the navigate path heals ONLY on a positively-signalled block — each of these is
+# reachable in classify() solely via a concrete status/challenge/clearance signal (steps 4–7), never
+# from a bare empty oracle. `unknown`/`no_data_channel`/`clean` are NOT here → a thin page is left alone.
+_NAV_BLOCKS = ("transient", "rate_limit", "ip_block", "session_block", "fingerprint_block")
+
 
 def _auth_of(headers: dict) -> list[str]:
     """Summarize the auth on a request WITHOUT echoing secret values (never leak cookies)."""
@@ -223,6 +232,9 @@ class Hydra:
         self._bind_human()
         self._seen: set = set()           # (url, body) keys already captured this session (dedup)
         self.context: list[dict] = []     # every candidate + WHICH action fired it
+        self.streams: list[dict] = []     # live WS/SSE feeds seen this session (push odds/prices)
+        self._streams_page = None
+        self._watch_streams()
         return self
 
     def __exit__(self, *a):
@@ -234,6 +246,37 @@ class Hydra:
         seed so keystroke + mouse are the same person — and a relaunch's fresh persona gets a
         fresh mouse too (rule 2), instead of the old identity's mouse."""
         self.human = Human(self.session.page, persona=self.persona, seed=self.persona.seed)
+
+    def _watch_streams(self):
+        """Attach a PERSISTENT WebSocket listener to the current page. A WS opens once on load and
+        lives the whole session (push odds/prices/tickers), so this can't be a bounded per-action
+        window like _record — it stays on. Accumulates each feed: URL + the client's subscribe
+        frames (to replay it) + a sample of received frames (the data). Re-attaches on a relaunch's
+        new page (guarded so drop/rotate — same page — don't double-listen)."""
+        page = self.session.page
+        if getattr(self, "_streams_page", None) is page:
+            return
+        self._streams_page = page
+
+        def on_ws(ws):
+            u = ws.url
+            if _is_noise(u) or any(s["url"] == u for s in self.streams):
+                return
+            sc = {"kind": "websocket", "url": u, "sent": [], "received": [], "n_received": 0}
+            self.streams.append(sc)
+            ws.on("framesent", lambda p: isinstance(p, str) and len(sc["sent"]) < 5
+                  and sc["sent"].append(p[:400]))
+
+            def _recv(p):
+                sc["n_received"] += 1
+                if isinstance(p, str) and len(sc["received"]) < 3:
+                    sc["received"].append(p[:400])
+            ws.on("framereceived", _recv)
+
+        try:
+            page.on("websocket", on_ws)
+        except Exception:
+            pass
 
     # ── properties (the state) ────────────────────────────────────────────────
     @property
@@ -271,18 +314,53 @@ class Hydra:
                 return result                                   # got it, or terminal, or out of tries
             # #5 escalate: same block recurs (lever didn't clear it) → next rung; else start at
             # the diagnosed lever's rung — on THIS session's ladder.
-            if v.block_class == last_class:
-                rung = min(rung + 1, len(self._ladder) - 1)
-            elif v.lever in self._ladder:
-                rung = self._ladder.index(v.lever)
-            elif v.lever == "rotate_exit":       # native/1-exit: no IP to rotate → relaunch is the only card
-                rung = len(self._ladder) - 1
-            else:                                # unknown / cost_ladder → walk the ladder from the top
-                rung = 0
+            rung, lever = self._escalate(v, rung, last_class)
             last_class = v.block_class
-            reopened = self._heal(self._ladder[rung])
+            reopened = self._heal(lever)
             do_nav = navigate or reopened                       # #6: re-nav only if asked, or reopened
         return result
+
+    def _escalate(self, v, rung: int, last_class):
+        """Pick the next heal rung + lever on THIS session's ladder. If the SAME block recurs (the
+        last lever didn't clear it) walk DOWN one rung; otherwise start at the diagnosed lever's
+        rung. Shared by capture() (data path) and open_healed() (navigate path). Returns (rung, lever)."""
+        if v.block_class == last_class:
+            rung = min(rung + 1, len(self._ladder) - 1)         # recurs → escalate
+        elif v.lever in self._ladder:
+            rung = self._ladder.index(v.lever)                  # start at the diagnosed lever
+        elif v.lever == "rotate_exit":       # native/1-exit: no IP to rotate → relaunch is the only card
+            rung = len(self._ladder) - 1
+        else:                                # unknown / cost_ladder → walk the ladder from the top
+            rung = 0
+        return rung, self._ladder[rung]
+
+    def open_healed(self, url: str, *, label: str = "load", wait_ms: int = 6000, max_heal: int = 4):
+        """Navigate + MECHANICALLY self-heal a real block — the heal loop capture() has, but for the
+        INTERACTIVE path (MCP `open_page`, or an agent that just navigates then drives the page
+        itself). Escalates the cost ladder (patience → rotate → drop_session → relaunch) when a
+        *positively-signalled* block is up (403/429/503/401/412 · challenge · clearance cookie),
+        re-navigating on the new exit each round. Two deliberate differences from capture(): it does
+        NOT interact/scroll (the agent does that), and it does NOT heal on a bare empty oracle — a
+        thin-but-fine page (200, no API) is NOT a block (see `_NAV_BLOCKS`). On-load APIs are still
+        merged into h.context. Returns (load_candidates, surviving_Verdict|None) — the verdict is
+        non-None ONLY when a real block outlived the whole ladder (so the caller can tell the brain)."""
+        result, rung, last_class, surviving = None, -1, None, None
+        for attempt in range(1, max_heal + 1):
+            result = _capture(url, page=self.session.page, interact=False, scroll_steps=0,
+                              challenge_wait_ms=wait_ms, scroll_rng=self.human._rng,
+                              scroll_scale=self.persona.base_ms / 135.0, navigate=True)
+            self._merge(result, label)                          # fold on-load APIs into context
+            v = classify(result.signals) if result.signals is not None else None
+            if v is None or not (v.blocked and v.self_heal and v.block_class in _NAV_BLOCKS):
+                surviving = None                                # cleared · thin-but-fine · human-part
+                break
+            surviving = v                                       # a real nav-block is standing
+            if attempt >= max_heal:
+                break                                           # out of tries → return it as surviving
+            rung, lever = self._escalate(v, rung, last_class)
+            last_class = v.block_class
+            self._heal(lever)                                   # rotate/drop/relaunch → re-nav next round
+        return (result.candidates if result else []), surviving
 
     def _merge(self, result, label: str):
         """#3: fold a CaptureResult's candidates into the ONE shared recorder (context/_seen),
@@ -315,6 +393,7 @@ class Hydra:
             self.session.relaunch(); self._reidentify(); reopened = True
         if reopened:
             self._bind_human()
+            self._watch_streams()             # new page after relaunch → re-attach the WS listener
         return reopened
 
     def _reidentify(self):
