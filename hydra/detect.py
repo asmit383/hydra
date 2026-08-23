@@ -107,8 +107,9 @@ def classify(sig: Signals) -> Verdict:
         r.append("WWW-Authenticate / redirect-to-login → auth gate")
         return _verdict("auth_required", 0.85, r, "auth required — human/login")
 
-    # 4. Transient JS challenge (auto-clearing) → patience, change nothing.
-    if sig.challenge_shape and not sig.interactive_captcha:
+    # 4. Transient JS challenge (auto-clearing) → patience, change nothing. (A captcha wall
+    #    was already caught at step 2, so anything challenge-shaped here is auto-clearing.)
+    if sig.challenge_shape:
         r.append("challenge-shape interstitial (auto-clearing) → wait it out")
         return _verdict("transient", 0.7, r, "transient challenge — patience")
 

@@ -24,6 +24,7 @@ from mcp.server import MCPServer
 from mcp.server.mcpserver import Image
 
 from hydra import Hydra
+from hydra.discover import _challenge_title
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 mcp = MCPServer("hydra")
@@ -74,23 +75,59 @@ def _safe(x: dict) -> dict:
     return {k: x[k] for k in ("url", "method", "status", "shape", "size", "auth", "fired_on") if k in x}
 
 
+def _block(h):
+    """Thin block-sentinel over the CURRENT page. snapshot()/click() have no oracle to run full
+    classify(), so surface only POSITIVE markers: a captcha widget on a challenge/thin page (→
+    hard_verify, the brain's job), or an interstitial title (→ transient, the server heals it).
+    Returns None on a normal page (no false 'blocked' — we only flag what we can see)."""
+    try:
+        page = h.session.page
+        info = page.evaluate("""() => ({
+            widget: ['.h-captcha', '.g-recaptcha', '#cf-turnstile', 'iframe[src*="hcaptcha.com"]',
+                     'iframe[src*="recaptcha"]', 'iframe[src*="challenges.cloudflare.com"]',
+                     'iframe[src*="turnstile"]'].some(s => document.querySelector(s)),
+            len: document.body ? document.body.innerText.length : 0 })""")
+        ct = _challenge_title(page.title() or "")
+        if info["widget"] and (bool(ct) or info["len"] < 2000):     # widget + wall context
+            return {"class": "hard_verify", "self_heal": False,
+                    "needs": "YOU — solve it (or a human/solver)", "signal": "captcha wall"}
+        if ct:
+            return {"class": "transient", "self_heal": True,
+                    "needs": "server auto-heals (patience)", "signal": "challenge interstitial"}
+    except Exception:
+        pass
+    return None
+
+
 @mcp.tool()
 @_pinned
 def open_page(url: str) -> dict:
-    """Open a URL in the persistent stealth session (self-heals past antibot / geo-lock) and
-    return the page map: overlays to clear, scroll state, and ranked interactive elements."""
+    """Open a URL in the persistent stealth session and return the page map. On-load JS challenges
+    get a humanized patience wait automatically. If a block is up, the map carries a `block` verdict
+    {class, self_heal, needs}: a captcha wall → `hard_verify` (the brain must solve it); an
+    auto-clearing challenge → `transient` (the server waits it out)."""
     h = _h()
-    h.open(url, wait_ms=5500)
-    h.wait_ready()                     # wait until the page stops changing before we map it
-    return h.snapshot()
+    h.open(url, wait_ms=5500)          # navigate; the on-load challenge-wait handles patience
+    h.wait_ready()                     # let the page settle before mapping
+    snap = h.snapshot()
+    b = _block(h)                      # captcha/challenge wall? → tell the brain whose job it is
+    if b:
+        snap["block"] = b
+    return snap
 
 
 @mcp.tool()
 @_pinned
 def snapshot() -> dict:
     """Map the CURRENT page — overlays (dismiss these first), scroll {y, hasMore}, and the ranked
-    elements (each {id, role, label, overlay}). Use the ids with click()/type_text(). No secrets."""
-    return _h().snapshot()
+    elements (each {id, role, label, overlay}). Use the ids with click()/type_text(). No secrets.
+    Carries a `block` verdict if a captcha/challenge is up (hard_verify = you must solve it)."""
+    h = _h()
+    snap = h.snapshot()
+    b = _block(h)
+    if b:
+        snap["block"] = b
+    return snap
 
 
 @mcp.tool()
@@ -102,7 +139,11 @@ def click(id: int) -> dict:
     before = len(h.context)
     h.act(id, label=f"mcp:click:{id}")
     h.wait_ready()                     # a navigating click may redirect/repaint after act() returns
-    return {"snapshot": h.snapshot(), "new_endpoints": [_safe(x) for x in h.context[before:]]}
+    snap = h.snapshot()
+    b = _block(h)                      # did the click walk us into a captcha/challenge?
+    if b:
+        snap["block"] = b
+    return {"snapshot": snap, "new_endpoints": [_safe(x) for x in h.context[before:]]}
 
 
 @mcp.tool()

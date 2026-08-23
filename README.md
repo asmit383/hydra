@@ -267,10 +267,11 @@ hydra gen https://example.com --endpoint /api/items --out client.py         # co
 🚧 Early, but the core works and is **proven on live, hard targets** (it pulls data off
 Cloudflare/Akamai-gated sites). Built: the `Hydra` SDK, vendor-free detection, session-
 preserving self-heal, data-backed humanized keystroke + MouseForge, discovery
-(API/SSR/RSC/WebSocket, POST/GraphQL), context capture, `observe`, warm-session replay.
-Honest edges: the self-heal's live-recovery rate on the hardest probabilistic blocks is
-unvalidated; the mouse isn't dataset-calibrated yet; the amortization store (discover-once →
-replay-forever) and the MCP/agent layer are designed, not built. See `phases.md`.
+(API/SSR/RSC/WebSocket, POST/GraphQL), context capture, `observe`/`snapshot`, warm-session
+replay, and the LLM-driver layer (in-process `pilot` + the `hydra.mcp_server` MCP server, with a
+vision-fallback `screenshot`). Honest edges: the self-heal's live-recovery rate on the hardest
+probabilistic blocks is unvalidated; the mouse isn't dataset-calibrated yet; the amortization
+store (discover-once → replay-forever) is designed, not built.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint spoofing.
 Hydra is the *adaptive, behavioral* layer above it.

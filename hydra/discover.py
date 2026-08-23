@@ -186,6 +186,33 @@ def _behavioral_warmup(page) -> None:
 
 _CLEARANCE_NAMES = {"_abck", "datadome", "cf_clearance", "_px", "ak_bmsc", "bm_sv"}
 
+# An INTERACTIVE captcha widget on the page — a wall a human/solver must clear, NOT an
+# auto-clearing JS challenge. Detected from the served HTML: the widget host in an iframe/script
+# src, or the widget's own container class/id. It routes the block to `hard_verify` (stop for a
+# human/solver), so the cost-ordered heal ladder doesn't burn patience→rotate→relaunch on a wall
+# none of them can move — the single worst bucket to land a captcha in.
+_CAPTCHA_MARKERS = (
+    "hcaptcha.com", "challenges.cloudflare.com", "turnstile", "recaptcha",
+    "arkoselabs", "funcaptcha", "captcha-delivery.com", "geetest",
+    "h-captcha", "g-recaptcha", "cf-turnstile", "grecaptcha",
+)
+
+
+def _has_captcha(html: str) -> bool:
+    """True if the served HTML carries an interactive captcha widget (iframe/script host or
+    widget container)."""
+    low = (html or "").lower()
+    return any(m in low for m in _CAPTCHA_MARKERS)
+
+
+def _is_captcha_wall(html: str, title_hit, nav_status) -> bool:
+    """A captcha that's the page's PURPOSE (a wall), not an incidental login/form widget on a full
+    content page — so a normal SSR page that embeds a reCAPTCHA form isn't misread as a hard block
+    (it should stay `no_data_channel`). Wall = widget present AND (challenge title | block status |
+    thin page). Only consulted when the oracle is red anyway."""
+    return _has_captcha(html) and (
+        bool(title_hit) or nav_status in (403, 429, 503) or len(html or "") < 15000)
+
 
 @contextmanager
 def _keep(page):
@@ -252,6 +279,7 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
                     and response.frame.parent_frame is None):
                 doc["status"] = response.status
                 doc["headers"] = {k.lower(): v for k, v in (response.headers or {}).items()}
+                doc.setdefault("first_status", response.status)   # request #1 status (pre-emptive?)
         except Exception:
             pass
         # record challenge hosts seen (to *name* a block) and never treat the
@@ -407,6 +435,8 @@ def capture(url: str, proxy: dict | None = None, wait_ms: int = 3500,
             www_authenticate=doc_headers.get("www-authenticate"),
             clearance_cookies=clearance,
             challenge_shape=bool(title_hit),
+            interactive_captcha=_is_captcha_wall(html, title_hit, nav_status),  # wall → hard_verify
+            first_request_block=doc.get("first_status") in (403, 503),   # blocked on request #1
         )
     except Exception:
         signals = None
