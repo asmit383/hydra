@@ -270,7 +270,9 @@ preserving self-heal, data-backed humanized keystroke + MouseForge, discovery
 (API/SSR/RSC/WebSocket, POST/GraphQL), context capture, `observe`/`snapshot`, warm-session
 replay, and the LLM-driver layer (in-process `pilot` + the `hydra.mcp_server` MCP server, with a
 vision-fallback `screenshot`). Honest edges: the self-heal's live-recovery rate on the hardest
-probabilistic blocks is unvalidated; the mouse isn't dataset-calibrated yet; the amortization
+probabilistic blocks is unvalidated; the mouse trajectory persona isn't dataset-calibrated yet
+(the extraction pipeline — `hydra.mouse_calibrate`, SapiMouse → `MouseForge.from_file` — is built;
+it just needs a run on the data); the amortization
 store (discover-once → replay-forever) is designed, not built.
 
 Built on [Camoufox](https://github.com/daijro/camoufox) — engine-level fingerprint spoofing.
