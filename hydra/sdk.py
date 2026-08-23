@@ -377,6 +377,12 @@ class Hydra:
         it*. New candidates are returned and appended to `h.context`."""
         return self._record(lambda: self.click(target), label, wait_ms)
 
+    def act_xy(self, x: float, y: float, label: str = "", *, wait_ms: int = 2500) -> list[dict]:
+        """Click at a raw VIEWPORT pixel and capture the APIs it triggers — the coordinate-based
+        `act()`, for widgets the map can't resolve (iframe captcha, canvas, JS dropdown). Pairs with
+        a screenshot: the model reads a pixel off the image and acts on it. Coords are viewport CSS px."""
+        return self._record(lambda: self.human.click_xy(x, y), label, wait_ms)
+
     # ── behavioral actions (delegate to Human; act by selector OR observe() id) ─
     def _resolve(self, target):
         return f'[data-hydra-id="{target}"]' if isinstance(target, int) else target

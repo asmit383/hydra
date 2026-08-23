@@ -382,6 +382,16 @@ class Human:
         time.sleep(self._rng.uniform(0.05, 0.11))     # click hold (down→up dwell)
         self.page.mouse.up()
 
+    def click_xy(self, x: float, y: float) -> None:
+        """Humanized click at a raw VIEWPORT pixel (no element) — for targets the DOM map can't
+        resolve: a captcha checkbox in a cross-origin iframe, a canvas widget, a JS-drawn dropdown.
+        Same motion as click() (persona trajectory → settle → human-held press), just to coords."""
+        self._trace_to(x, y)
+        time.sleep(self.mouse.settle_ms / 1000.0)
+        self.page.mouse.down()
+        time.sleep(self._rng.uniform(0.05, 0.11))
+        self.page.mouse.up()
+
     def type(self, target, text: str, *, secret: bool = False,
              click_first: bool = True) -> list[tuple]:
         """Type `text` into `target` key-by-key with human timing. NEVER uses

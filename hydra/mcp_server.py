@@ -148,6 +148,26 @@ def click(id: int) -> dict:
 
 @mcp.tool()
 @_pinned
+def click_at(x: int, y: int) -> dict:
+    """Click at VIEWPORT pixel (x, y) with a humanized mouse — the ACT companion to screenshot():
+    reach things the structural map CAN'T (a captcha checkbox in a cross-origin iframe, a
+    Google-Places autocomplete item, a canvas widget). Prefer click(id) when the element is in the
+    map. Coords are viewport CSS pixels — the SAME space as snapshot()'s `at`. If you read a target
+    off a screenshot on a HiDPI display, divide the image coords by devicePixelRatio (=
+    screenshot_width / snapshot viewport width). Returns {snapshot, new_endpoints}."""
+    h = _h()
+    before = len(h.context)
+    h.act_xy(x, y, label=f"mcp:click_at:{x},{y}")
+    h.wait_ready()
+    snap = h.snapshot()
+    b = _block(h)
+    if b:
+        snap["block"] = b
+    return {"snapshot": snap, "new_endpoints": [_safe(e) for e in h.context[before:]]}
+
+
+@mcp.tool()
+@_pinned
 def scroll(steps: int = 3) -> dict:
     """Scroll down (humanized) to reveal more content, then return the updated page map."""
     h = _h()

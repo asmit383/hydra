@@ -10,7 +10,7 @@ pytest.importorskip("mcp")
 def test_mcp_tools_registered():
     from hydra.mcp_server import mcp
     names = {t.name for t in asyncio.run(mcp.list_tools())}
-    assert {"open_page", "snapshot", "click", "scroll", "type_text",
+    assert {"open_page", "snapshot", "click", "click_at", "scroll", "type_text",
             "endpoints", "fetch", "reset", "screenshot"} <= names
 
 

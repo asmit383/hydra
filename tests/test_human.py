@@ -7,7 +7,35 @@ KeystrokeModel that types into a page is exercised here with no page at all.
 import math
 from pathlib import Path
 
-from hydra.human import (KeystrokeModel, _digraph_mult, _tok, sample_persona)
+from hydra.human import (Human, KeystrokeModel, _digraph_mult, _tok, sample_persona)
+
+
+class _FakeMouse:
+    def __init__(self):
+        self.moves = self.downs = self.ups = 0
+    def move(self, x, y):
+        self.moves += 1
+    def down(self):
+        self.downs += 1
+    def up(self):
+        self.ups += 1
+
+
+class _FakePage:
+    """Just enough page for the humanized mouse (no browser)."""
+    def __init__(self):
+        self.mouse = _FakeMouse()
+        self.viewport_size = {"width": 1280, "height": 800}
+    def wait_for_timeout(self, ms):
+        pass
+
+
+def test_click_xy_traverses_a_trajectory_then_presses():
+    p = _FakePage()
+    h = Human(p, persona=sample_persona(7), seed=7)
+    h.click_xy(400, 300)
+    assert p.mouse.downs == 1 and p.mouse.ups == 1     # exactly one human-held press
+    assert p.mouse.moves >= 8                           # a real curve to the point, not a teleport
 
 
 def _mean(xs):
