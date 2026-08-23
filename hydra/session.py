@@ -77,12 +77,28 @@ def pick_proxy(mode: str = "native", *, proxies_file: str | None = None,
     raise ValueError(f"unknown proxy mode: {mode!r}")
 
 
+def _geo_align(host: str | None):
+    """The geoip value for an exit `host`. If it's a literal IP (a static-exit pool, where the host
+    IS the exit) → align straight to it, no lookup. If it's a HOSTNAME (a rotating-gateway proxy like
+    `gw.provider.io:10000`, where the hostname is NOT the exit — the real US/residential IP is chosen
+    server-side per connection) → return True so Camoufox detects the actual exit IP *through the
+    proxy* and aligns to that. Passing the hostname straight to geoip throws 'Invalid IP address'."""
+    if not host:
+        return True
+    try:
+        import ipaddress
+        ipaddress.ip_address(host)
+        return host                      # static exit IP → align directly
+    except ValueError:
+        return True                      # gateway hostname → let Camoufox find the exit IP
+
+
 def _geoip_for(proxy: dict | None):
     """Align geoip to the proxy's exit IP so timezone/locale match. True for native."""
     if not proxy:
         return True
     host = proxy["server"].split("://", 1)[-1].rsplit(":", 1)[0]
-    return host or True
+    return _geo_align(host)
 
 
 @contextmanager

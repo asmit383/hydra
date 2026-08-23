@@ -17,7 +17,7 @@ expensive relaunch only when the *fingerprint itself* is what leaked.
 from __future__ import annotations
 
 from hydra.relay import Relay
-from hydra.session import launch
+from hydra.session import _geo_align, launch
 
 
 def _exit_parts(ex: dict) -> tuple[str, str, str, str]:
@@ -60,8 +60,12 @@ class HealSession:
         return self
 
     def _launch(self, proxy, geo) -> None:
+        # normalize the exit host → geoip here (one choke point for open/rotate/relaunch): a literal
+        # IP aligns directly; a rotating-gateway HOSTNAME → True (Camoufox finds the exit through the
+        # proxy) instead of throwing 'Invalid IP address'. geo=None (native) stays None → auto-align.
+        geoip = _geo_align(geo) if geo is not None else None
         self._cm = launch(proxy=proxy, headless=self.headless,
-                          storage_state=self.storage_state, humanize=self.humanize, geoip=geo)
+                          storage_state=self.storage_state, humanize=self.humanize, geoip=geoip)
         self.page = self._cm.__enter__()
 
     def close(self) -> None:

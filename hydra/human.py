@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -349,13 +350,26 @@ class Human:
         scale = self.persona.base_ms / 135.0
         for i in range(n):
             try:
-                self.page.mouse.wheel(0, self._rng.randint(280, 820))   # variable chunk
+                self._wheel_glide(self._rng.randint(280, 820))          # variable chunk, glided
                 if i and self._rng.random() < 0.2:                      # occasional re-read
                     time.sleep(self._rng.uniform(0.15, 0.5))
-                    self.page.mouse.wheel(0, -self._rng.randint(120, 380))
+                    self._wheel_glide(-self._rng.randint(120, 380))
             except Exception:
                 break
             time.sleep(self._rng.uniform(0.3, 1.1) * scale)             # reading dwell, persona-paced
+
+    def _wheel_glide(self, distance: int) -> None:
+        """Deliver a scroll `distance` as a BURST of small wheel ticks (like real trackpad/notch
+        events) so the page GLIDES instead of teleporting. A single big `mouse.wheel` delta jumps
+        in one frame — visually jarring AND a bot tell (humans emit a stream of ~100px ticks, never
+        one 800px hop). We fire ~90–130px ticks a few ms apart; the browser renders that as smooth
+        motion. Slight per-tick jitter (distance + gap) keeps the cadence organic, not metronomic."""
+        remaining, sign = abs(distance), (1 if distance >= 0 else -1)
+        while remaining > 0:
+            tick = min(remaining, self._rng.randint(90, 130))
+            self.page.mouse.wheel(0, sign * tick)
+            remaining -= tick
+            time.sleep(self._rng.uniform(0.012, 0.03))                  # inter-tick gap → smooth glide
 
     def click(self, target) -> None:
         """Move to an interior point (Camoufox humanizes the PATH), settle, then press with
@@ -396,18 +410,67 @@ class Human:
              click_first: bool = True) -> list[tuple]:
         """Type `text` into `target` key-by-key with human timing. NEVER uses
         `fill()` — fill() sets .value with ZERO keystroke events, which is an
-        instant flag. `secret=True` (passwords) disables typo-correction. Returns
-        the (key, flight_ms, dwell_ms, meta) trace — for logging / KS validation."""
+        instant flag. `secret=True` (passwords) disables typo-correction.
+
+        The field is CLEARED first, so a re-type REPLACES its contents instead of appending into
+        whatever was there (incl. an input mask's `(___) ___-____` template). And for a numeric,
+        FORMATTED field (phone / zip / card), we verify the digits actually landed: humanized
+        flights + correction-backspaces can race a mask's live reformat and drop a character, so on
+        a mismatch we clear and re-enter at a calm, evenly-spaced cadence the reformat can keep up
+        with. Returns the (key, flight_ms, dwell_ms, meta) trace — for logging / KS validation."""
         loc = self._locate(target)
         if click_first:
             self.click(loc)
             time.sleep(self._rng.uniform(0.08, 0.2))  # read the field before typing
+        self._clear(loc)                              # replace, don't append (mask-safe)
+        trace = self._type_plan(text, allow_errors=not secret)
+        if self._needs_calm_retry(loc, text):         # a mask ate a digit → calm re-entry
+            self._clear(loc)
+            trace = self._type_calm(text)
+        return trace
+
+    def _clear(self, loc) -> None:
+        """Empty the field so a type REPLACES its contents (never appends) — select-all + one real
+        Backspace (deletes the whole selection in a single stroke). NEVER fill()."""
+        try:
+            loc.evaluate("el => { if (el.select) el.select(); "
+                         "else if (el.setSelectionRange) el.setSelectionRange(0, (el.value||'').length); }")
+            self.page.keyboard.press("Backspace")
+        except Exception:
+            pass
+
+    def _type_plan(self, text: str, *, allow_errors: bool) -> list[tuple]:
+        """The humanized pass — persona-timed flights + key-hold dwell, with optional typo/correction."""
         trace: list[tuple] = []
-        for p in self.model.plan(text, first_field=True, allow_errors=not secret):
+        for p in self.model.plan(text, first_field=True, allow_errors=allow_errors):
             time.sleep(p.flight_ms / 1000.0)
             self.page.keyboard.press(_tok(p.key), delay=int(p.dwell_ms))  # delay = hold
             trace.append((p.key, round(p.flight_ms, 1), round(p.dwell_ms, 1), p.meta))
         return trace
+
+    def _type_calm(self, text: str) -> list[tuple]:
+        """A calm, evenly-spaced pass with NO typo injection — the fallback for masked/formatted
+        fields where humanized flights + correction backspaces race the mask's reformat and drop a
+        char. Slower, steady keys let the reformat settle between strokes so every digit lands."""
+        trace: list[tuple] = []
+        for ch in text:
+            time.sleep(self._rng.uniform(0.09, 0.16))
+            self.page.keyboard.press(_tok(ch), delay=self._rng.randint(40, 90))
+            trace.append((ch, 0.0, 0.0, "calm"))
+        return trace
+
+    def _needs_calm_retry(self, loc, text: str) -> bool:
+        """True ONLY for a numeric field (phone/zip/card) whose digits didn't all land — the
+        masked-drop case. We never second-guess text/email/autocomplete fields, whose rendered
+        value legitimately differs from the raw keystrokes."""
+        digits = re.sub(r"\D", "", text)
+        if len(digits) < 4 or len(digits) < 0.6 * len(text.strip()):
+            return False                              # not a numeric field → leave it alone
+        try:
+            got = re.sub(r"\D", "", loc.input_value() or "")
+        except Exception:
+            return False
+        return got != digits                          # a digit was dropped/garbled by the mask
 
 
 def type_into(page, target, text: str, *, seed: int | None = None,

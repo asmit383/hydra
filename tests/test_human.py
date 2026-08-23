@@ -208,3 +208,75 @@ def test_scroll_uses_variable_distances_not_fixed(monkeypatch):
     dys = [dy for _, dy in p.mouse.wheels]
     assert len(dys) >= 8                         # it scrolled
     assert len(set(dys)) > 3                     # VARIABLE distances — not a fixed page-length each time
+
+
+def test_scroll_glides_in_small_ticks_not_teleporting_hops(monkeypatch):
+    # regression: a chunk must be delivered as a BURST of small wheel ticks (smooth glide), never a
+    # single big mouse.wheel delta (a visible teleport + bot tell).
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    p = _Page()
+    Human(p, seed=5).scroll(steps=6)
+    ticks = [dy for _, dy in p.mouse.wheels]
+    assert ticks and all(abs(dy) <= 130 for dy in ticks)   # every event is a small tick, no 800px hop
+    assert len(ticks) > 6                                   # 6 steps → many ticks (each chunk = a burst)
+
+
+# ── typing into real (stateful / masked) fields — clear-before-type + calm retry ────────────────
+class _KeyField:
+    """A fake <input>: keystrokes (via the page keyboard) mutate .value like a real field.
+    `drop_one_digit` simulates an input mask that EATS the first digit of the first fast burst —
+    the race we hit on Nordstrom's phone field."""
+    def __init__(self, value="", drop_one_digit=False):
+        self.value, self._sel, self._dropped, self._drop = value, False, False, drop_one_digit
+    def click(self): pass                            # has .click → _locate treats it as a Locator
+    def evaluate(self, _js): self._sel = True        # select-all marker (our _clear)
+    def input_value(self): return self.value
+    def key(self, k):
+        if k == "Backspace":
+            self.value = "" if self._sel else self.value[:-1]   # selection → clears whole field
+            self._sel = False
+            return
+        self._sel = False
+        ch = " " if k == "Space" else k
+        if self._drop and not self._dropped and ch.isdigit():
+            self._dropped = True                     # the mask swallows this one digit, once
+            return
+        self.value += ch
+
+
+class _KbKeyboard:
+    def __init__(self, field): self.field = field
+    def press(self, key, delay=0): self.field.key(key)
+
+
+class _KbPage:
+    def __init__(self, field):
+        self.keyboard, self.mouse = _KbKeyboard(field), _Mouse()
+        self.viewport_size = {"width": 1280, "height": 800}
+    def wait_for_timeout(self, _ms): pass
+
+
+def test_type_clears_field_first_so_it_replaces_not_appends(monkeypatch):
+    # bug: re-typing a field CONCATENATED into it ("OLD"+"NEW"). type() must clear first.
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    f = _KeyField(value="OLD")
+    Human(_KbPage(f), seed=1).type(f, "NEW", secret=True, click_first=False)
+    assert f.value == "NEW"                          # replaced, NOT "OLDNEW"
+
+
+def test_type_recovers_a_masked_digit_drop_via_calm_retry(monkeypatch):
+    # bug: humanized keystrokes raced the mask and dropped a digit ("9125550188" → "(912) 550-188").
+    # type() must detect the numeric mismatch and re-enter calmly so every digit lands.
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    f = _KeyField(drop_one_digit=True)
+    trace = Human(_KbPage(f), seed=1).type(f, "9125550188", secret=True, click_first=False)
+    assert f.value == "9125550188"                   # all ten digits present after the calm retry
+    assert trace and trace[-1][3] == "calm"          # the recovery pass actually ran
+
+
+def test_type_does_not_retry_a_text_field(monkeypatch):
+    # a non-numeric field whose value legitimately differs (autocomplete) must NOT trigger a retry
+    monkeypatch.setattr("hydra.human.time.sleep", lambda *_: None)
+    f = _KeyField(drop_one_digit=True)               # would drop a digit IF we retried — but we won't
+    trace = Human(_KbPage(f), seed=1).type(f, "Savannah", secret=True, click_first=False)
+    assert all(t[3] != "calm" for t in trace)        # no calm retry for a text field
