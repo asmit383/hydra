@@ -70,3 +70,14 @@ def test_end_to_end_parse_segment_and_from_file(tmp_path):
     mf = MouseForge.from_file(str(out))                # the calibrated corpus loads…
     persona = mf.generate(seed=7)                      # …and drives generation
     assert isinstance(persona, MousePersona) and 0.5 <= persona.speed <= 1.7
+
+
+def test_mouseforge_auto_loads_calibrated_corpus(tmp_path, monkeypatch):
+    corpus = [{"speed": 0.9, "curve": 0.2, "overshoot": 0.1, "tremor": 1.0, "settle_ms": 70},
+              {"speed": 1.2, "curve": 0.35, "overshoot": 0.2, "tremor": 1.5, "settle_ms": 110}]
+    p = tmp_path / "mc.json"
+    p.write_text(json.dumps(corpus))
+    monkeypatch.setenv("HYDRA_MOUSE_CORPUS", str(p))
+    assert len(MouseForge().corpus) == 2               # running the extractor auto-upgrades sessions
+    monkeypatch.setenv("HYDRA_MOUSE_CORPUS", str(tmp_path / "nope.json"))
+    assert len(MouseForge().corpus) >= 4               # no corpus → placeholder archetypes fallback

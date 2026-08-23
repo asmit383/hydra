@@ -48,12 +48,32 @@ _CORPUS = [
 ]
 
 
+def _load_default_corpus() -> list[MousePersona] | None:
+    """A measured corpus if one exists — `HYDRA_MOUSE_CORPUS`, else `data/mouse_corpus.json` (what
+    `python -m hydra.mouse_calibrate` writes). None if absent/unreadable → caller falls back."""
+    import json
+    import os
+    path = os.environ.get("HYDRA_MOUSE_CORPUS") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "mouse_corpus.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        fields = MousePersona.__dataclass_fields__
+        corpus = [MousePersona(**{k: v[k] for k in fields if k in v}) for v in raw]
+        return corpus or None
+    except Exception:
+        return None
+
+
 class MouseForge:
     """Samples a coherent mouse persona per session. Continuous jitter → fleet diversity;
     each session's seed gives a distinct persona (never a preset a sensor can correlate)."""
 
     def __init__(self, corpus: list[MousePersona] | None = None, *, model: str = "bootstrap"):
-        self.corpus = corpus or _CORPUS
+        # calibrated-if-available: prefer a measured corpus (from hydra.mouse_calibrate) when one is
+        # present, else the placeholder archetypes. So running the extractor auto-upgrades every
+        # session from guessed → measured, no code change.
+        self.corpus = corpus or _load_default_corpus() or _CORPUS
         if model != "bootstrap":
             raise NotImplementedError("only 'bootstrap' built; copula/bayes-net = scale-up")
 
